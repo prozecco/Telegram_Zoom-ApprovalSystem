@@ -4,7 +4,7 @@ import html
 import threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -153,9 +153,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
     else:
         # Regular User Main Menu
+        mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
         keyboard = [
             [
-                InlineKeyboardButton("🔗 Register on Zoom", callback_data="user_link"),
+                InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
                 InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
             ]
         ]
@@ -232,9 +233,10 @@ async def user_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="HTML"
         )
     elif query.data == "back_to_user_menu":
+        mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
         keyboard = [
             [
-                InlineKeyboardButton("🔗 Register on Zoom", callback_data="user_link"),
+                InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
                 InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
             ]
         ]
@@ -509,9 +511,10 @@ async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     context.user_data.clear()
     
+    mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
     keyboard = [
         [
-            InlineKeyboardButton("🔗 Register on Zoom", callback_data="user_link"),
+            InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
             InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
         ],
         [
@@ -683,9 +686,10 @@ async def submit_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.clear()
     
     # Back to user menu
+    mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
     keyboard_user = [
         [
-            InlineKeyboardButton("🔗 Register on Zoom", callback_data="user_link"),
+            InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
             InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
         ],
         [
@@ -708,9 +712,10 @@ async def cancel_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.answer()
         context.user_data.clear()
         
+        mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
         keyboard = [
             [
-                InlineKeyboardButton("🔗 Register on Zoom", callback_data="user_link"),
+                InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
                 InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
             ],
             [
@@ -807,11 +812,19 @@ async def admin_decision_callback(update: Update, context: ContextTypes.DEFAULT_
             with storage.get_db() as conn:
                 conn.execute("UPDATE submissions_history SET action_taken = 'Approved' WHERE id = ?", (sub_id,))
                 
-            await try_notify_user(
+            user_profile = storage.get_user_by_email(email)
+            join_url = user_profile.get("join_url") if user_profile else None
+            
+            msg = (
                 "🎉 <b>Congratulations!</b>\n"
                 "Your registration request for the Zoom meeting has been <b>Approved</b>.\n"
-                "You will receive a confirmation email from Zoom containing your joining link."
             )
+            if join_url:
+                msg += f"\nHere is your unique link: <a href=\"{join_url}\">Join Meeting</a>"
+            else:
+                msg += "\nYou will receive a confirmation email from Zoom containing your joining link."
+                
+            await try_notify_user(msg)
             await query.edit_message_text(
                 text=f"{clean_text}\n\n🟢 <b>Current Status:</b> Approved by admin.\n\nPlease choose an action:",
                 reply_markup=query.message.reply_markup,
@@ -1966,8 +1979,9 @@ def main() -> None:
     storage.init_db()
     logger.info("Database initialized successfully.")
 
-    # 1.5 Start health check server for Hugging Face or other PaaS platforms
-    threading.Thread(target=start_health_check_server, daemon=True).start()
+    # 1.5 Start health check server & FastAPI web server for Telegram Mini App
+    import web_server
+    threading.Thread(target=web_server.start_server, daemon=True).start()
 
     # 2. Build the Application with custom HTTPX timeouts
     from telegram.request import HTTPXRequest

@@ -178,5 +178,64 @@ class TestSystemScaffold(unittest.TestCase):
         self.assertTrue(app.is_valid_email("test@domain.com"))
         self.assertFalse(app.is_valid_email("invalid-email"))
 
+    def test_zoom_service_custom_methods(self):
+        """
+        Verify ZoomService.get_custom_questions and register_registrant.
+        """
+        import unittest.mock as mock
+        import time
+        zs = zoom_service.ZoomService()
+        zs._access_token = "mock_access_token"
+        zs._token_expires_at = time.time() + 3600
+        
+        with mock.patch("requests.get") as mock_get:
+            mock_response = mock.Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "custom_questions": [{"title": "Job Title", "type": "short", "required": True}]
+            }
+            mock_get.return_value = mock_response
+            
+            questions = zs.get_custom_questions()
+            self.assertEqual(len(questions["custom_questions"]), 1)
+            self.assertEqual(questions["custom_questions"][0]["title"], "Job Title")
+            
+        with mock.patch("requests.post") as mock_post:
+            mock_response = mock.Mock()
+            mock_response.status_code = 201
+            mock_response.json.return_value = {
+                "id": "registrant_999",
+                "join_url": "https://zoom.us/j/999"
+            }
+            mock_post.return_value = mock_response
+            
+            reg = zs.register_registrant("test@example.com", "Test", "User", [{"title": "Job Title", "value": "Developer"}])
+            self.assertEqual(reg["registrant_id"], "registrant_999")
+            self.assertEqual(reg["join_url"], "https://zoom.us/j/999")
+
+    def test_web_server_endpoints(self):
+        """
+        Verify FastAPI web server endpoints.
+        """
+        from fastapi.testclient import TestClient
+        import web_server
+        import unittest.mock as mock
+        
+        client = TestClient(web_server.app)
+        
+        # 1. Test Health check
+        response = client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+        
+        # 2. Test Questions endpoint
+        with mock.patch("zoom_service.ZoomService.get_custom_questions") as mock_get_questions:
+            mock_get_questions.return_value = {
+                "custom_questions": [{"title": "Industry", "type": "short"}]
+            }
+            response = client.get("/api/questions")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["custom_questions"][0]["title"], "Industry")
+
 if __name__ == "__main__":
     unittest.main()

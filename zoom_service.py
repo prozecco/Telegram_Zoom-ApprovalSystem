@@ -220,3 +220,57 @@ class ZoomService:
             raise Exception(f"Zoom API Error (Status {response.status_code}): {err_msg}")
             
         return True
+
+    def get_custom_questions(self) -> dict:
+        """
+        Retrieves standard and custom questions configured for the Zoom meeting.
+        """
+        token = self._get_access_token()
+        url = f"https://api.zoom.us/v2/meetings/{self.meeting_id}/registrants/questions"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            raise Exception(f"Failed to fetch Zoom registration questions (Status {response.status_code}): {response.text}")
+            
+        return response.json()
+
+    def register_registrant(self, email: str, first_name: str, last_name: str, custom_questions: list = None) -> dict:
+        """
+        Submits a new registrant to Zoom.
+        Returns a dict containing 'join_url' and 'registrant_id'.
+        """
+        token = self._get_access_token()
+        url = f"https://api.zoom.us/v2/meetings/{self.meeting_id}/registrants"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "email": email.strip().lower(),
+            "first_name": first_name.strip(),
+            "last_name": last_name.strip()
+        }
+        if custom_questions:
+            payload["custom_questions"] = custom_questions
+            
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code not in [200, 201]:
+            err_msg = response.text
+            try:
+                err_data = response.json()
+                err_msg = err_data.get("message", err_msg)
+            except Exception:
+                pass
+            raise Exception(f"Zoom Registration Error (Status {response.status_code}): {err_msg}")
+            
+        data = response.json()
+        return {
+            "registrant_id": data.get("id"),
+            "join_url": data.get("join_url")
+        }
