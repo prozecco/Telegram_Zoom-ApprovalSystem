@@ -2627,6 +2627,7 @@ async def clearnotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Retrieves all registrants for the active meeting from Zoom and synchronizes them.
+    Uses the Zoom registration date (create_time) as the user's created_at timestamp.
     """
     if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
@@ -2653,33 +2654,67 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 first_name = r.get("first_name", "")
                 last_name = r.get("last_name", "")
                 zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
+                
+                # Extract the real Zoom registration date
+                zoom_create_time = r.get("create_time")  # e.g. "2026-05-23T13:11:00Z"
                     
                 existing = storage.get_user_by_email(email)
                 if not existing:
+                    # Insert new user with real Zoom registration date as created_at
                     with storage.get_db() as cursor:
-                        storage.execute_query(
-                            cursor,
-                            "INSERT INTO users (registered_email, telegram_id, global_status) VALUES (?, ?, ?)",
-                            (email.lower(), None, db_status)
-                        )
+                        if zoom_create_time:
+                            storage.execute_query(
+                                cursor,
+                                "INSERT INTO users (registered_email, telegram_id, global_status, created_at) VALUES (?, ?, ?, ?)",
+                                (email.lower(), None, db_status, zoom_create_time)
+                            )
+                        else:
+                            storage.execute_query(
+                                cursor,
+                                "INSERT INTO users (registered_email, telegram_id, global_status) VALUES (?, ?, ?)",
+                                (email.lower(), None, db_status)
+                            )
                     sync_count += 1
                 else:
+                    changed = False
                     if existing["global_status"] != db_status:
                         storage.update_user_status(email, db_status)
+                        changed = True
+                    
+                    # Backfill: if existing created_at is newer than the real Zoom date,
+                    # it means created_at was set by a previous sync run — fix it
+                    if zoom_create_time:
+                        with storage.get_db() as cursor:
+                            storage.execute_query(
+                                cursor,
+                                "UPDATE users SET created_at = ? WHERE LOWER(registered_email) = LOWER(?) AND created_at > ?",
+                                (zoom_create_time, email, zoom_create_time)
+                            )
+                    if changed:
                         sync_count += 1
                         
+                # Log to submissions_history with real Zoom registration date
                 history = storage.get_submissions_by_email(email)
                 if not history:
-                    storage.add_submission(
-                        email=email,
-                        telegram_id=0,
-                        zoom_name=zoom_name,
-                        telegram_username="Unknown",
-                        meeting_id=active_meeting_id,
-                        action_taken=db_status
-                    )
+                    with storage.get_db() as cursor:
+                        if zoom_create_time:
+                            storage.execute_query(
+                                cursor,
+                                """INSERT INTO submissions_history 
+                                   (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken, action_timestamp) 
+                                   VALUES (?, ?, ?, ?, ?, ?)""",
+                                (email, zoom_name, "Unknown", active_meeting_id, db_status, zoom_create_time)
+                            )
+                        else:
+                            storage.execute_query(
+                                cursor,
+                                """INSERT INTO submissions_history 
+                                   (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken) 
+                                   VALUES (?, ?, ?, ?, ?)""",
+                                (email, zoom_name, "Unknown", active_meeting_id, db_status)
+                            )
                     
-        await reply_helper(update, f"✅ Sync completed! Synchronized <b>{sync_count}</b> registrant profiles from Zoom.")
+        await reply_helper(update, f"✅ Sync completed! Synchronized <b>{sync_count}</b> registrant profiles from Zoom.\n\n<i>Registration dates have been updated to match Zoom records.</i>")
     except Exception as e:
         logger.error("Sync error: %s", e)
         await reply_helper(update, f"⚠️ Error synchronizing from Zoom: <code>{html.escape(str(e))}</code>")
