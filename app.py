@@ -1157,47 +1157,38 @@ async def search_input_received(update: Update, context: ContextTypes.DEFAULT_TY
         tg_id = int(query_text)
         user_record = storage.get_user_by_telegram_id(tg_id)
     
-    # 2. Search by Email
+    # 2. Search by Email (Exact Match)
     if not user_record and "@" in query_text and "." in query_text:
         user_record = storage.get_user_by_email(email_query)
         
-    # 3. Search by Username
-    if not user_record:
-        username_clean = query_text.lstrip("@").lower()
-        with storage.get_db() as conn:
-            cursor = conn.execute(
-                """
-                SELECT registered_email FROM submissions_history 
-                WHERE LOWER(submitted_telegram_username) = ? 
-                LIMIT 1
-                """,
-                (username_clean,)
-            )
-            row = cursor.fetchone()
-            if row:
-                user_record = storage.get_user_by_email(row["registered_email"])
-                
-    # 4. Search by Zoom Name
+    # 3. Search by substring match on Zoom Name, Email, or Telegram Username (Unified Search)
     if not user_record:
         zoom_clean = query_text.lower()
+        query_param = f"%{zoom_clean}%"
+        
+        # Build placeholder based on db type
+        placeholder = "%s" if storage.IS_POSTGRES else "?"
+        sql = f"""
+            SELECT DISTINCT u.registered_email 
+            FROM users u
+            LEFT JOIN submissions_history s ON s.registered_email = u.registered_email
+            WHERE LOWER(u.registered_email) LIKE {placeholder} 
+               OR LOWER(s.submitted_zoom_name) LIKE {placeholder} 
+               OR LOWER(s.submitted_telegram_username) LIKE {placeholder}
+            LIMIT 10
+        """
+        
         with storage.get_db() as conn:
-            cursor = conn.execute(
-                """
-                SELECT DISTINCT registered_email FROM submissions_history 
-                WHERE LOWER(submitted_zoom_name) = ? OR LOWER(submitted_zoom_name) LIKE ?
-                LIMIT 5
-                """,
-                (zoom_clean, f"%{zoom_clean}%")
-            )
+            cursor = conn.execute(sql, (query_param, query_param, query_param))
             rows = cursor.fetchall()
             
         if len(rows) > 1:
-            message = f"🔍 <b>Multiple matches found for Zoom Name:</b> <code>{html.escape(query_text)}</code>\n\n"
+            message = f"🔍 <b>Multiple matches found for:</b> <code>{html.escape(query_text)}</code>\n\n"
             keyboard = []
             for row in rows:
                 email = row["registered_email"]
                 history = storage.get_submissions_by_email(email)
-                zoom_name = history[0]["submitted_zoom_name"] if history else "Unknown"
+                zoom_name = history[0]["submitted_zoom_name"] if history else "Manual Profile"
                 sub_id = history[0]["id"] if history else 0
                 
                 message += f"- {html.escape(zoom_name)} (<code>{html.escape(email)}</code>)\n"
