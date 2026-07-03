@@ -89,12 +89,8 @@
         .filter-pills {
             display: flex;
             gap: 8px;
-            overflow-x: auto;
+            flex-wrap: wrap;
             padding-bottom: 6px;
-            scrollbar-width: none; /* Firefox */
-        }
-        .filter-pills::-webkit-scrollbar {
-            display: none; /* Safari and Chrome */
         }
         .pill {
             padding: 8px 16px;
@@ -107,6 +103,7 @@
             cursor: pointer;
             white-space: nowrap;
             transition: all 0.2s;
+            flex-shrink: 0;
         }
         .pill.active {
             background: var(--tg-theme-button-color, #2481cc);
