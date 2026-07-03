@@ -17,7 +17,8 @@ const statTotalEl = document.getElementById('stat-total');
 const statPendingEl = document.getElementById('stat-pending');
 const statApprovedEl = document.getElementById('stat-approved');
 const statDeniedEl = document.getElementById('stat-denied');
-const tableBodyEl = document.getElementById('table-body');
+const requestsListEl = document.getElementById('requests-list');
+const listCountLabel = document.getElementById('list-count-label');
 const searchInputEl = document.getElementById('search-input');
 const selectAllCheckbox = document.getElementById('select-all-checkbox');
 const bulkBar = document.getElementById('bulk-bar');
@@ -81,12 +82,10 @@ async function fetchRequests() {
         renderTable();
     } catch (err) {
         console.error(err);
-        tableBodyEl.innerHTML = `
-            <tr>
-                <td colspan="6" style="text-align: center; padding: 40px; color: #ef4444;">
-                    ❌ Failed to load requests. Please try refreshing.
-                </td>
-            </tr>
+        requestsListEl.innerHTML = `
+            <div style="text-align: center; padding: 40px; color: #ef4444;">
+                ❌ Failed to load requests. Please try refreshing.
+            </div>
         `;
     }
 }
@@ -129,13 +128,11 @@ async function runAction(emails, actionName) {
 
 // UI Rendering
 function showLoadingState() {
-    tableBodyEl.innerHTML = `
-        <tr>
-            <td colspan="6" style="text-align: center; padding: 40px; color: var(--tg-theme-hint-color);">
-                <div class="spinner" style="margin: 0 auto 10px;"></div>
-                Loading registrant data...
-            </td>
-        </tr>
+    requestsListEl.innerHTML = `
+        <div style="text-align: center; padding: 40px; color: var(--tg-theme-hint-color);">
+            <div class="spinner" style="margin: 0 auto 10px;"></div>
+            Loading registrant data...
+        </div>
     `;
 }
 
@@ -148,64 +145,79 @@ function getStatusBadge(status) {
 }
 
 function renderTable() {
+    listCountLabel.textContent = `Showing ${allRequests.length} item${allRequests.length !== 1 ? 's' : ''}`;
+    
     if (allRequests.length === 0) {
-        tableBodyEl.innerHTML = `
-            <tr>
-                <td colspan="6" style="text-align: center; padding: 40px; color: var(--tg-theme-hint-color);">
-                    No registrants found matching the filter or search term.
-                </td>
-            </tr>
+        requestsListEl.innerHTML = `
+            <div style="text-align: center; padding: 40px; color: var(--tg-theme-hint-color);">
+                No registrants found matching the filter or search term.
+            </div>
         `;
         return;
     }
     
-    tableBodyEl.innerHTML = '';
+    requestsListEl.innerHTML = '';
     allRequests.forEach(req => {
-        const tr = document.createElement('tr');
-        tr.dataset.email = req.registered_email;
+        const card = document.createElement('div');
+        card.className = 'request-card';
+        card.dataset.email = req.registered_email;
         
-        // Checkbox
-        const tdCheck = document.createElement('td');
-        tdCheck.className = 'checkbox-cell';
-        tdCheck.onclick = (e) => e.stopPropagation(); // prevent opening drawer on checkbox click
+        // Checkbox container
+        const cbContainer = document.createElement('div');
+        cbContainer.className = 'card-checkbox';
+        cbContainer.onclick = (e) => e.stopPropagation(); // prevent drawer on checkbox click
         
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.checked = selectedEmails.has(req.registered_email);
         checkbox.onchange = () => toggleSelectEmail(req.registered_email, checkbox.checked);
-        tdCheck.appendChild(checkbox);
-        tr.appendChild(tdCheck);
+        cbContainer.appendChild(checkbox);
+        card.appendChild(cbContainer);
         
-        // Name
-        const tdName = document.createElement('td');
-        tdName.textContent = req.zoom_name || 'Manual Profile';
-        tdName.style.fontWeight = '500';
-        tr.appendChild(tdName);
+        // Main info container
+        const mainInfo = document.createElement('div');
+        mainInfo.className = 'card-main-info';
         
-        // Email
-        const tdEmail = document.createElement('td');
-        tdEmail.innerHTML = `<code>${req.registered_email}</code>`;
-        tr.appendChild(tdEmail);
+        const topRow = document.createElement('div');
+        topRow.className = 'card-row-top';
         
-        // Country/Region
-        const tdCountry = document.createElement('td');
-        tdCountry.textContent = req.country ? `[${req.country}]` : '-';
-        tdCountry.style.color = 'var(--tg-theme-hint-color)';
-        tr.appendChild(tdCountry);
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'card-name';
+        nameSpan.textContent = req.zoom_name || 'Manual Profile';
+        topRow.appendChild(nameSpan);
         
-        // Status
-        const tdStatus = document.createElement('td');
-        tdStatus.innerHTML = getStatusBadge(req.global_status);
-        tr.appendChild(tdStatus);
+        if (req.country) {
+            const regionSpan = document.createElement('span');
+            regionSpan.className = 'card-region';
+            regionSpan.textContent = req.country;
+            topRow.appendChild(regionSpan);
+        }
+        mainInfo.appendChild(topRow);
         
-        // Quick Action Row Buttons
-        const tdAction = document.createElement('td');
-        tdAction.style.textAlign = 'right';
-        tdAction.onclick = (e) => e.stopPropagation();
+        const emailDiv = document.createElement('div');
+        emailDiv.className = 'card-email';
+        emailDiv.textContent = req.registered_email;
+        mainInfo.appendChild(emailDiv);
         
-        const btnGroup = document.createElement('div');
-        btnGroup.className = 'action-btn-group';
-        btnGroup.style.justifyContent = 'flex-end';
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'card-meta';
+        
+        metaDiv.innerHTML = getStatusBadge(req.global_status);
+        
+        if (req.created_at) {
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'card-time';
+            const dateStr = new Date(req.created_at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+            timeSpan.textContent = `· ${dateStr}`;
+            metaDiv.appendChild(timeSpan);
+        }
+        mainInfo.appendChild(metaDiv);
+        card.appendChild(mainInfo);
+        
+        // Quick Action Buttons
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'card-actions';
+        actionsDiv.onclick = (e) => e.stopPropagation();
         
         if (req.global_status !== 'Approved') {
             const approveBtn = document.createElement('button');
@@ -213,7 +225,7 @@ function renderTable() {
             approveBtn.innerHTML = '🟢';
             approveBtn.title = 'Approve';
             approveBtn.onclick = () => runAction([req.registered_email], 'Approve');
-            btnGroup.appendChild(approveBtn);
+            actionsDiv.appendChild(approveBtn);
         }
         if (req.global_status !== 'Denied') {
             const denyBtn = document.createElement('button');
@@ -221,15 +233,14 @@ function renderTable() {
             denyBtn.innerHTML = '🔴';
             denyBtn.title = 'Deny';
             denyBtn.onclick = () => runAction([req.registered_email], 'Deny');
-            btnGroup.appendChild(denyBtn);
+            actionsDiv.appendChild(denyBtn);
         }
+        card.appendChild(actionsDiv);
         
-        tdAction.appendChild(btnGroup);
-        tr.appendChild(tdAction);
+        // Click on the card opens detail drawer
+        card.onclick = () => openDrawer(req);
         
-        // Row click opens details drawer
-        tr.onclick = () => openDrawer(req);
-        tableBodyEl.appendChild(tr);
+        requestsListEl.appendChild(card);
     });
 }
 
@@ -245,10 +256,13 @@ function toggleSelectEmail(email, isChecked) {
 
 function toggleSelectAll(isChecked) {
     allRequests.forEach(req => {
-        const checkbox = document.querySelector(`tr[data-email="${req.registered_email}"] input[type="checkbox"]`);
-        if (checkbox) {
-            checkbox.checked = isChecked;
-            toggleSelectEmail(req.registered_email, isChecked);
+        const card = document.querySelector(`.request-card[data-email="${req.registered_email}"]`);
+        if (card) {
+            const checkbox = card.querySelector('.card-checkbox input[type="checkbox"]');
+            if (checkbox) {
+                checkbox.checked = isChecked;
+                toggleSelectEmail(req.registered_email, isChecked);
+            }
         }
     });
 }
@@ -387,8 +401,8 @@ saveNotesBtn.onclick = saveNotes;
 document.getElementById('bulk-btn-cancel').onclick = () => {
     selectedEmails.clear();
     selectAllCheckbox.checked = false;
-    // Uncheck all row checkboxes
-    document.querySelectorAll('td.checkbox-cell input[type="checkbox"]').forEach(cb => cb.checked = false);
+    // Uncheck all card checkboxes
+    document.querySelectorAll('.card-checkbox input[type="checkbox"]').forEach(cb => cb.checked = false);
     updateBulkBar();
 };
 
