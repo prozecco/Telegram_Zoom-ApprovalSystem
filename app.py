@@ -1755,10 +1755,12 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     
     if query.data == "admin_requests":
-        await requests_command(update, context)
+        await requests_command(update, context, page=0, status_filter="Pending")
     elif query.data.startswith("reqpage_"):
-        page = int(query.data.split("_")[1])
-        await requests_command(update, context, page=page)
+        parts = query.data.split("_")
+        page = int(parts[1])
+        status_filter = parts[2] if len(parts) > 2 else "Pending"
+        await requests_command(update, context, page=page, status_filter=status_filter)
     elif query.data == "admin_name_changes":
         await admin_name_changes_command(update, context)
     elif query.data == "admin_config":
@@ -2004,31 +2006,66 @@ async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     storage.update_user_status(email, user_record["global_status"], behavior_notes=notes_text)
     await update.message.reply_text(f"📝 Notes updated for user <code>{html.escape(email)}</code>.", parse_mode="HTML")
 
-async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0) -> None:
+async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0, status_filter: str = None) -> None:
     """
-    Lists all registration requests in the database with page-by-page pagination (10 per page).
+    Lists registration requests in the database with page-by-page pagination (10 per page), filtered by status.
     """
     if not storage.is_admin(update.effective_user.id):
         await reply_helper(update, "Unauthorized access.")
         return
+
+    # Parse status_filter parameter
+    # 1. From text command parameter (e.g. /requests approved)
+    if not status_filter and context.args:
+        arg = context.args[0].strip().lower()
+        if arg in ["pending", "active"]:
+            status_filter = "Pending"
+        elif arg in ["approved", "approve"]:
+            status_filter = "Approved"
+        elif arg in ["denied", "deny"]:
+            status_filter = "Denied"
+        elif arg == "all":
+            status_filter = "All"
+            
+    # 2. Default if not set
+    if not status_filter:
+        status_filter = "Pending"
+
+    # Fetch users matching status filter
+    query_str = """
+        SELECT u.registered_email, u.global_status, u.telegram_id,
+               (SELECT s.submitted_zoom_name FROM submissions_history s 
+                WHERE s.registered_email = u.registered_email 
+                ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+        FROM users u
+    """
+    params = ()
+    if status_filter != "All":
+        query_str += " WHERE u.global_status = %s" if storage.IS_POSTGRES else " WHERE u.global_status = ?"
+        params = (status_filter,)
+        
+    query_str += " ORDER BY u.updated_at DESC"
         
     with storage.get_db() as conn:
-        cursor = conn.execute(
-            """
-            SELECT u.registered_email, u.global_status, u.telegram_id,
-                   (SELECT s.submitted_zoom_name FROM submissions_history s 
-                    WHERE s.registered_email = u.registered_email 
-                    ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
-            FROM users u
-            ORDER BY u.updated_at DESC
-            """
-        )
+        cursor = conn.execute(query_str, params)
         rows = cursor.fetchall()
         
     if not rows:
-        keyboard = [[InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")]]
+        # Create filter switcher buttons even when empty
+        keyboard = []
+        filter_buttons = []
+        for f in ["Pending", "Approved", "Denied", "All"]:
+            if f != status_filter:
+                filter_buttons.append(InlineKeyboardButton(f"Show {f}", callback_data=f"reqpage_0_{f}"))
+        keyboard.append(filter_buttons)
+        keyboard.append([InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await reply_helper(update, "📋 <b>Registration Request List:</b>\n\n<i>No profiles found in the database.</i>", reply_markup=reply_markup)
+        
+        await reply_helper(
+            update, 
+            f"📋 <b>{status_filter} Registration Request List:</b>\n\n<i>No profiles found with status '{status_filter}' in the database.</i>", 
+            reply_markup=reply_markup
+        )
         return
 
     PAGE_SIZE = 10
@@ -2045,7 +2082,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     end_idx = min(start_idx + PAGE_SIZE, total_items)
     page_rows = rows[start_idx:end_idx]
     
-    message = f"📋 <b>Registration Request List (Page {page + 1}/{total_pages}):</b>\n"
+    message = f"📋 <b>{status_filter} Request List (Page {page + 1}/{total_pages}):</b>\n"
     message += f"Showing profiles {start_idx + 1} to {end_idx} of {total_items} total.\n\n"
     
     keyboard = []
@@ -2059,6 +2096,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         # Get latest submission ID for this email
         with storage.get_db() as conn2:
             c2 = conn2.execute(
+                "SELECT id FROM submissions_history WHERE registered_email = %s ORDER BY action_timestamp DESC LIMIT 1" if storage.IS_POSTGRES else
                 "SELECT id FROM submissions_history WHERE registered_email = ? ORDER BY action_timestamp DESC LIMIT 1", 
                 (email,)
             )
@@ -2075,18 +2113,25 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         emoji = status_emojis.get(status, "⚪")
         
         connection_type = "🌐 Zoom-Only" if (not telegram_id or telegram_id == 0) else "🤖 Bot"
-        message += f"- {emoji} {html.escape(name)} (<code>{html.escape(email)}</code>) [<i>{status}</i>] (<i>{connection_type}</i>)\n"
+        message += f"- {emoji} {html.escape(name)} (<code>{html.escape(email)}</code>) (<i>{connection_type}</i>)\n"
         keyboard.append([InlineKeyboardButton(f"{emoji} Review: {name}", callback_data=f"reviewreq_{sub_id}")])
         
     # Navigation row
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("◀️ Previous", callback_data=f"reqpage_{page - 1}"))
+        nav_row.append(InlineKeyboardButton("◀️ Previous", callback_data=f"reqpage_{page - 1}_{status_filter}"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"reqpage_{page + 1}"))
+        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"reqpage_{page + 1}_{status_filter}"))
         
     if nav_row:
         keyboard.append(nav_row)
+        
+    # Filter selection row
+    filter_buttons = []
+    for f in ["Pending", "Approved", "Denied", "All"]:
+        if f != status_filter:
+            filter_buttons.append(InlineKeyboardButton(f"Show {f}", callback_data=f"reqpage_0_{f}"))
+    keyboard.append(filter_buttons)
         
     keyboard.append([InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2647,7 +2692,7 @@ def main() -> None:
     
     # 4.5 Add Main Menu Navigation Callbacks
     application.add_handler(
-        CallbackQueryHandler(admin_menu_callback, pattern="^(admin_requests|admin_name_changes|admin_config|admin_report|back_to_admin_panel|reqpage_\\d+|admin_search)$")
+        CallbackQueryHandler(admin_menu_callback, pattern="^(admin_requests|admin_name_changes|admin_config|admin_report|back_to_admin_panel|reqpage_\\d+.*|admin_search)$")
     )
     application.add_handler(
         CallbackQueryHandler(user_menu_callback, pattern="^(user_link|user_help|back_to_user_menu)$")
