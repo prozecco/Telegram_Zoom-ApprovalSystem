@@ -1755,7 +1755,7 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     
     if query.data == "admin_requests":
-        await requests_command(update, context, page=0, status_filter="Pending")
+        await requests_command(update, context, page=0, status_filter="New")
     elif query.data.startswith("reqpage_"):
         parts = query.data.split("_")
         page = int(parts[1])
@@ -2006,103 +2006,251 @@ async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     storage.update_user_status(email, user_record["global_status"], behavior_notes=notes_text)
     await update.message.reply_text(f"📝 Notes updated for user <code>{html.escape(email)}</code>.", parse_mode="HTML")
 
+def _relative_time(dt_value) -> str:
+    """Returns a compact relative time string like '2h ago', '3d ago' from a datetime or string."""
+    from datetime import datetime, timezone
+    if not dt_value:
+        return ""
+    if isinstance(dt_value, str):
+        # Parse ISO-style timestamp strings
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%f",
+                     "%Y-%m-%d %H:%M:%S%z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S.%f%z"):
+            try:
+                dt_value = datetime.strptime(dt_value, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return ""
+    # Make both timezone-aware or both naive for subtraction
+    now = datetime.now(timezone.utc)
+    if dt_value.tzinfo is None:
+        dt_value = dt_value.replace(tzinfo=timezone.utc)
+    diff = now - dt_value
+    total_seconds = int(diff.total_seconds())
+    if total_seconds < 0:
+        return "just now"
+    if total_seconds < 60:
+        return f"{total_seconds}s ago"
+    minutes = total_seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days < 30:
+        return f"{days}d ago"
+    months = days // 30
+    return f"{months}mo ago"
+
 async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0, status_filter: str = None) -> None:
     """
-    Lists registration requests in the database with page-by-page pagination (10 per page), filtered by status.
+    Lists registration requests with pagination (10/page), filtered by status.
+    Pending sub-filters: 'New' (≤3 days old) and 'OnHold' (>3 days old).
+    Sorted by registration date descending (newest first).
+    Supports page jump via /requests <filter> <page_number>.
     """
     if not storage.is_admin(update.effective_user.id):
         await reply_helper(update, "Unauthorized access.")
         return
 
-    # Parse status_filter parameter
-    # 1. From text command parameter (e.g. /requests approved)
+    # --- Parse arguments from text command: /requests [filter] [page_number] ---
     if not status_filter and context.args:
-        arg = context.args[0].strip().lower()
-        if arg in ["pending", "active"]:
-            status_filter = "Pending"
-        elif arg in ["approved", "approve"]:
-            status_filter = "Approved"
-        elif arg in ["denied", "deny"]:
-            status_filter = "Denied"
-        elif arg == "all":
-            status_filter = "All"
-            
-    # 2. Default if not set
-    if not status_filter:
-        status_filter = "Pending"
+        for arg in context.args:
+            a = arg.strip().lower()
+            if a.isdigit():
+                page = max(0, int(a) - 1)  # user types 1-based, we use 0-based
+            elif a in ["pending", "active"]:
+                status_filter = "Pending"
+            elif a in ["new", "recent"]:
+                status_filter = "New"
+            elif a in ["onhold", "hold", "on_hold", "stale"]:
+                status_filter = "OnHold"
+            elif a in ["approved", "approve"]:
+                status_filter = "Approved"
+            elif a in ["denied", "deny"]:
+                status_filter = "Denied"
+            elif a == "all":
+                status_filter = "All"
 
-    # Fetch users matching status filter
-    query_str = """
-        SELECT u.registered_email, u.global_status, u.telegram_id,
-               (SELECT s.submitted_zoom_name FROM submissions_history s 
-                WHERE s.registered_email = u.registered_email 
-                ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
-        FROM users u
-    """
-    params = ()
-    if status_filter != "All":
-        query_str += " WHERE u.global_status = %s" if storage.IS_POSTGRES else " WHERE u.global_status = ?"
+    if not status_filter:
+        status_filter = "New"  # Default: show only new pending users for daily review
+
+    # --- Build query based on filter ---
+    from datetime import datetime, timedelta, timezone
+    ONHOLD_DAYS = 3
+
+    if status_filter == "New":
+        # Pending users registered within the last ONHOLD_DAYS days
+        if storage.IS_POSTGRES:
+            query_str = """
+                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                       (SELECT s.submitted_zoom_name FROM submissions_history s
+                        WHERE s.registered_email = u.registered_email
+                        ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+                FROM users u
+                WHERE u.global_status = 'Pending' AND u.created_at >= NOW() - INTERVAL '""" + str(ONHOLD_DAYS) + """ days'
+                ORDER BY u.created_at DESC
+            """
+        else:
+            query_str = """
+                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                       (SELECT s.submitted_zoom_name FROM submissions_history s
+                        WHERE s.registered_email = u.registered_email
+                        ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+                FROM users u
+                WHERE u.global_status = 'Pending' AND u.created_at >= datetime('now', '-""" + str(ONHOLD_DAYS) + """ days')
+                ORDER BY u.created_at DESC
+            """
+        params = ()
+        filter_label = f"🆕 New Pending (≤{ONHOLD_DAYS}d)"
+    elif status_filter == "OnHold":
+        # Pending users registered more than ONHOLD_DAYS days ago
+        if storage.IS_POSTGRES:
+            query_str = """
+                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                       (SELECT s.submitted_zoom_name FROM submissions_history s
+                        WHERE s.registered_email = u.registered_email
+                        ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+                FROM users u
+                WHERE u.global_status = 'Pending' AND u.created_at < NOW() - INTERVAL '""" + str(ONHOLD_DAYS) + """ days'
+                ORDER BY u.created_at DESC
+            """
+        else:
+            query_str = """
+                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                       (SELECT s.submitted_zoom_name FROM submissions_history s
+                        WHERE s.registered_email = u.registered_email
+                        ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+                FROM users u
+                WHERE u.global_status = 'Pending' AND u.created_at < datetime('now', '-""" + str(ONHOLD_DAYS) + """ days')
+                ORDER BY u.created_at DESC
+            """
+        params = ()
+        filter_label = f"⏳ On Hold (>{ONHOLD_DAYS}d)"
+    elif status_filter == "Pending":
+        # All pending users (both new and on-hold)
+        query_str = """
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                   (SELECT s.submitted_zoom_name FROM submissions_history s
+                    WHERE s.registered_email = u.registered_email
+                    ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+            FROM users u
+            WHERE u.global_status = %s
+            ORDER BY u.created_at DESC
+        """ if storage.IS_POSTGRES else """
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                   (SELECT s.submitted_zoom_name FROM submissions_history s
+                    WHERE s.registered_email = u.registered_email
+                    ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+            FROM users u
+            WHERE u.global_status = ?
+            ORDER BY u.created_at DESC
+        """
+        params = ("Pending",)
+        filter_label = "🟡 All Pending"
+    elif status_filter == "All":
+        query_str = """
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                   (SELECT s.submitted_zoom_name FROM submissions_history s
+                    WHERE s.registered_email = u.registered_email
+                    ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+            FROM users u
+            ORDER BY u.created_at DESC
+        """
+        params = ()
+        filter_label = "📋 All Users"
+    else:
+        # Approved, Denied, etc.
+        query_str = """
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                   (SELECT s.submitted_zoom_name FROM submissions_history s
+                    WHERE s.registered_email = u.registered_email
+                    ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+            FROM users u
+            WHERE u.global_status = %s
+            ORDER BY u.created_at DESC
+        """ if storage.IS_POSTGRES else """
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                   (SELECT s.submitted_zoom_name FROM submissions_history s
+                    WHERE s.registered_email = u.registered_email
+                    ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
+            FROM users u
+            WHERE u.global_status = ?
+            ORDER BY u.created_at DESC
+        """
         params = (status_filter,)
-        
-    query_str += " ORDER BY u.updated_at DESC"
-        
+        status_emojis_map = {"Approved": "🟢", "Denied": "🔴", "Blacklisted": "🚫", "Deferred": "⏳"}
+        filter_label = f"{status_emojis_map.get(status_filter, '⚪')} {status_filter}"
+
     with storage.get_db() as conn:
         cursor = conn.execute(query_str, params)
         rows = cursor.fetchall()
-        
+
+    # --- Empty result with filter switcher ---
     if not rows:
-        # Create filter switcher buttons even when empty
         keyboard = []
-        filter_buttons = []
-        for f in ["Pending", "Approved", "Denied", "All"]:
+        filter_buttons_row1 = []
+        filter_buttons_row2 = []
+        for f, label in [("New", "🆕 New"), ("OnHold", "⏳ On Hold"), ("Pending", "🟡 All Pending")]:
             if f != status_filter:
-                filter_buttons.append(InlineKeyboardButton(f"Show {f}", callback_data=f"reqpage_0_{f}"))
-        keyboard.append(filter_buttons)
+                filter_buttons_row1.append(InlineKeyboardButton(label, callback_data=f"reqpage_0_{f}"))
+        for f, label in [("Approved", "🟢 Approved"), ("Denied", "🔴 Denied"), ("All", "📋 All")]:
+            if f != status_filter:
+                filter_buttons_row2.append(InlineKeyboardButton(label, callback_data=f"reqpage_0_{f}"))
+        if filter_buttons_row1:
+            keyboard.append(filter_buttons_row1)
+        if filter_buttons_row2:
+            keyboard.append(filter_buttons_row2)
         keyboard.append([InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         await reply_helper(
-            update, 
-            f"📋 <b>{status_filter} Registration Request List:</b>\n\n<i>No profiles found with status '{status_filter}' in the database.</i>", 
+            update,
+            f"📋 <b>{filter_label} Request List:</b>\n\n<i>No profiles found.</i>",
             reply_markup=reply_markup
         )
         return
 
+    # --- Pagination ---
     PAGE_SIZE = 10
     total_items = len(rows)
     total_pages = (total_items + PAGE_SIZE - 1) // PAGE_SIZE
-    
-    # Clamp page index
+
     if page < 0:
         page = 0
     elif page >= total_pages:
         page = total_pages - 1
-        
+
     start_idx = page * PAGE_SIZE
     end_idx = min(start_idx + PAGE_SIZE, total_items)
     page_rows = rows[start_idx:end_idx]
-    
-    message = f"📋 <b>{status_filter} Request List (Page {page + 1}/{total_pages}):</b>\n"
-    message += f"Showing profiles {start_idx + 1} to {end_idx} of {total_items} total.\n\n"
-    
+
+    message = f"📋 <b>{filter_label} (Page {page + 1}/{total_pages}):</b>\n"
+    message += f"Showing {start_idx + 1}–{end_idx} of {total_items} total.\n"
+    message += f"<i>Sorted by registration date (newest first)</i>\n\n"
+
     keyboard = []
-    
+
     for row in page_rows:
         email = row["registered_email"]
         status = row["global_status"]
         name = row["zoom_name"] or "Unknown (Manual Profile)"
         telegram_id = row.get("telegram_id")
-        
+        reg_time = row.get("created_at")
+        time_ago = _relative_time(reg_time)
+
         # Get latest submission ID for this email
         with storage.get_db() as conn2:
             c2 = conn2.execute(
                 "SELECT id FROM submissions_history WHERE registered_email = %s ORDER BY action_timestamp DESC LIMIT 1" if storage.IS_POSTGRES else
-                "SELECT id FROM submissions_history WHERE registered_email = ? ORDER BY action_timestamp DESC LIMIT 1", 
+                "SELECT id FROM submissions_history WHERE registered_email = ? ORDER BY action_timestamp DESC LIMIT 1",
                 (email,)
             )
             latest = c2.fetchone()
             sub_id = latest["id"] if latest else 0
-            
+
         status_emojis = {
             "Pending": "🟡",
             "Approved": "🟢",
@@ -2111,31 +2259,53 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
             "Deferred": "⏳"
         }
         emoji = status_emojis.get(status, "⚪")
-        
-        connection_type = "🌐 Zoom-Only" if (not telegram_id or telegram_id == 0) else "🤖 Bot"
-        message += f"- {emoji} {html.escape(name)} (<code>{html.escape(email)}</code>) (<i>{connection_type}</i>)\n"
+
+        connection_type = "🌐" if (not telegram_id or telegram_id == 0) else "🤖"
+        time_str = f" · {time_ago}" if time_ago else ""
+        if status_filter in ("All",):
+            # When showing all statuses, include the status text
+            message += f"- {emoji} {html.escape(name)} [{status}] {connection_type}{time_str}\n"
+            message += f"  <code>{html.escape(email)}</code>\n"
+        else:
+            message += f"- {emoji} {html.escape(name)} {connection_type}{time_str}\n"
+            message += f"  <code>{html.escape(email)}</code>\n"
         keyboard.append([InlineKeyboardButton(f"{emoji} Review: {name}", callback_data=f"reviewreq_{sub_id}")])
-        
-    # Navigation row
+
+    # --- Navigation row with page jump ---
     nav_row = []
+    if total_pages > 2 and page > 0:
+        nav_row.append(InlineKeyboardButton("⏮ First", callback_data=f"reqpage_0_{status_filter}"))
     if page > 0:
-        nav_row.append(InlineKeyboardButton("◀️ Previous", callback_data=f"reqpage_{page - 1}_{status_filter}"))
+        nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"reqpage_{page - 1}_{status_filter}"))
     if page < total_pages - 1:
         nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"reqpage_{page + 1}_{status_filter}"))
-        
+    if total_pages > 2 and page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("Last ⏭", callback_data=f"reqpage_{total_pages - 1}_{status_filter}"))
+
     if nav_row:
         keyboard.append(nav_row)
-        
-    # Filter selection row
-    filter_buttons = []
-    for f in ["Pending", "Approved", "Denied", "All"]:
+
+    # Tip for page jump (only show on page 1)
+    if page == 0 and total_pages > 3:
+        message += f"\n💡 <i>Tip: Jump to a page with</i> <code>/requests {status_filter.lower()} 5</code>\n"
+
+    # --- Filter switcher (2 rows for cleaner layout) ---
+    filter_buttons_row1 = []
+    filter_buttons_row2 = []
+    for f, label in [("New", "🆕 New"), ("OnHold", "⏳ On Hold"), ("Pending", "🟡 All Pending")]:
         if f != status_filter:
-            filter_buttons.append(InlineKeyboardButton(f"Show {f}", callback_data=f"reqpage_0_{f}"))
-    keyboard.append(filter_buttons)
-        
+            filter_buttons_row1.append(InlineKeyboardButton(label, callback_data=f"reqpage_0_{f}"))
+    for f, label in [("Approved", "🟢 Approved"), ("Denied", "🔴 Denied"), ("All", "📋 All")]:
+        if f != status_filter:
+            filter_buttons_row2.append(InlineKeyboardButton(label, callback_data=f"reqpage_0_{f}"))
+    if filter_buttons_row1:
+        keyboard.append(filter_buttons_row1)
+    if filter_buttons_row2:
+        keyboard.append(filter_buttons_row2)
+
     keyboard.append([InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
     query = update.callback_query
     if query:
         await query.edit_message_text(message, reply_markup=reply_markup, parse_mode="HTML")
