@@ -2431,12 +2431,13 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             registrants = zoom_service.list_registrants(zoom_status)
             for r in registrants:
                 email = r.get("email")
+                if not email:
+                    continue
+                email = email.strip().lower()
+                
                 first_name = r.get("first_name", "")
                 last_name = r.get("last_name", "")
                 zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
-                
-                if not email:
-                    continue
                     
                 existing = storage.get_user_by_email(email)
                 if not existing:
