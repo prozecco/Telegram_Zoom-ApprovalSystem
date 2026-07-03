@@ -180,6 +180,10 @@ async def register_user(req: RegisterRequest):
     # 4. Insert registration submission into Database
     try:
         active_meeting_id = zoom_service.meeting_id
+        country_code = None
+        if req.standard_fields:
+            country_code = req.standard_fields.get("country")
+            
         sub_id = storage.add_submission(
             email=email,
             telegram_id=telegram_id,
@@ -187,7 +191,8 @@ async def register_user(req: RegisterRequest):
             telegram_username=telegram_username,
             meeting_id=active_meeting_id,
             action_taken="Pending",
-            join_url=join_url
+            join_url=join_url,
+            country=country_code
         )
     except Exception as e:
         logger.error(f"Database insertion failed: {e}")

@@ -2107,7 +2107,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         # Pending users registered within the last ONHOLD_DAYS days
         if storage.IS_POSTGRES:
             query_str = """
-                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at, u.country,
                        (SELECT s.submitted_zoom_name FROM submissions_history s
                         WHERE s.registered_email = u.registered_email
                         ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -2117,7 +2117,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
             """
         else:
             query_str = """
-                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at, u.country,
                        (SELECT s.submitted_zoom_name FROM submissions_history s
                         WHERE s.registered_email = u.registered_email
                         ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -2131,7 +2131,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         # Pending users registered more than ONHOLD_DAYS days ago
         if storage.IS_POSTGRES:
             query_str = """
-                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at, u.country,
                        (SELECT s.submitted_zoom_name FROM submissions_history s
                         WHERE s.registered_email = u.registered_email
                         ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -2141,7 +2141,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
             """
         else:
             query_str = """
-                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+                SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at, u.country,
                        (SELECT s.submitted_zoom_name FROM submissions_history s
                         WHERE s.registered_email = u.registered_email
                         ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -2154,7 +2154,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     elif status_filter == "Pending":
         # All pending users (both new and on-hold)
         query_str = """
-            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at, u.country,
                    (SELECT s.submitted_zoom_name FROM submissions_history s
                     WHERE s.registered_email = u.registered_email
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -2162,7 +2162,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
             WHERE u.global_status = %s
             ORDER BY u.created_at DESC
         """ if storage.IS_POSTGRES else """
-            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at, u.country,
                    (SELECT s.submitted_zoom_name FROM submissions_history s
                     WHERE s.registered_email = u.registered_email
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -2174,7 +2174,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         filter_label = "🟡 All Pending"
     elif status_filter == "All":
         query_str = """
-            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at, u.country,
                    (SELECT s.submitted_zoom_name FROM submissions_history s
                     WHERE s.registered_email = u.registered_email
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -2186,7 +2186,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     else:
         # Approved, Denied, etc.
         query_str = """
-            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at, u.country,
                    (SELECT s.submitted_zoom_name FROM submissions_history s
                     WHERE s.registered_email = u.registered_email
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -2194,7 +2194,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
             WHERE u.global_status = %s
             ORDER BY u.created_at DESC
         """ if storage.IS_POSTGRES else """
-            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at,
+            SELECT u.registered_email, u.global_status, u.telegram_id, u.created_at, u.country,
                    (SELECT s.submitted_zoom_name FROM submissions_history s
                     WHERE s.registered_email = u.registered_email
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -2262,6 +2262,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         telegram_id = row.get("telegram_id")
         reg_time = row.get("created_at")
         time_ago = _relative_time(reg_time)
+        country = row.get("country")
 
         # Get latest submission ID for this email
         with storage.get_db() as conn2:
@@ -2283,13 +2284,14 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         emoji = status_emojis.get(status, "⚪")
 
         connection_type = "🌐" if (not telegram_id or telegram_id == 0) else "🤖"
+        country_str = f" [{country}]" if country else ""
         time_str = f" · {time_ago}" if time_ago else ""
         if status_filter in ("All",):
             # When showing all statuses, include the status text
-            message += f"- {emoji} {html.escape(name)} [{status}] {connection_type}{time_str}\n"
+            message += f"- {emoji} {html.escape(name)} [{status}] {connection_type}{country_str}{time_str}\n"
             message += f"  <code>{html.escape(email)}</code>\n"
         else:
-            message += f"- {emoji} {html.escape(name)} {connection_type}{time_str}\n"
+            message += f"- {emoji} {html.escape(name)} {connection_type}{country_str}{time_str}\n"
             message += f"  <code>{html.escape(email)}</code>\n"
         keyboard.append([InlineKeyboardButton(f"{emoji} Review: {name}", callback_data=f"reviewreq_{sub_id}")])
 
@@ -2673,7 +2675,7 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # 2. Open a single database connection
         with storage.get_db() as cursor:
             # 3. Pre-fetch all users and histories to avoid SELECTs in the loop
-            cursor.execute("SELECT registered_email, global_status, created_at FROM users")
+            cursor.execute("SELECT registered_email, global_status, created_at, country FROM users")
             existing_users = {row["registered_email"].lower().strip(): row for row in cursor.fetchall()}
             
             cursor.execute("SELECT DISTINCT registered_email FROM submissions_history")
@@ -2691,6 +2693,7 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     last_name = r.get("last_name", "")
                     zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
                     zoom_create_time = r.get("create_time")
+                    zoom_country = r.get("country")
                     
                     user_record = existing_users.get(email)
                     
@@ -2699,17 +2702,17 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                         # Insert user
                         if zoom_create_time:
                             cursor.execute(
-                                "INSERT INTO users (registered_email, telegram_id, global_status, created_at) VALUES (?, ?, ?, ?)",
-                                (email, None, db_status, zoom_create_time)
+                                "INSERT INTO users (registered_email, telegram_id, global_status, created_at, country) VALUES (?, ?, ?, ?, ?)",
+                                (email, None, db_status, zoom_create_time, zoom_country)
                             )
                         else:
                             cursor.execute(
-                                "INSERT INTO users (registered_email, telegram_id, global_status) VALUES (?, ?, ?)",
-                                (email, None, db_status)
+                                "INSERT INTO users (registered_email, telegram_id, global_status, country) VALUES (?, ?, ?, ?)",
+                                (email, None, db_status, zoom_country)
                             )
                         sync_count += 1
                         # Add to local dictionary to avoid duplicate insertions in the same run
-                        existing_users[email] = {"registered_email": email, "global_status": db_status, "created_at": zoom_create_time}
+                        existing_users[email] = {"registered_email": email, "global_status": db_status, "created_at": zoom_create_time, "country": zoom_country}
                     else:
                         # Check if status needs update
                         status_changed = False
@@ -2720,6 +2723,13 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                             )
                             status_changed = True
                             sync_count += 1
+                        
+                        # Update country if Zoom returns a new/different one
+                        if zoom_country and user_record.get("country") != zoom_country:
+                            cursor.execute(
+                                "UPDATE users SET country = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (zoom_country, email)
+                            )
                         
                         # Backfill timestamp if needed
                         if zoom_create_time:

@@ -99,6 +99,7 @@ def init_db():
                 global_status TEXT DEFAULT 'Pending',
                 behavior_notes TEXT DEFAULT '',
                 join_url TEXT,
+                country TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -152,6 +153,12 @@ def init_db():
         # Migration: Safely add join_url column to users table if it doesn't exist
         try:
             execute_query(cursor, "ALTER TABLE users ADD COLUMN join_url TEXT;")
+        except Exception:
+            pass
+
+        # Migration: Safely add country column to users table if it doesn't exist
+        try:
+            execute_query(cursor, "ALTER TABLE users ADD COLUMN country TEXT;")
         except Exception:
             pass
 
@@ -290,7 +297,7 @@ def get_submissions_by_email(email: str) -> list[dict]:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-def add_submission(email: str, telegram_id: int, zoom_name: str, telegram_username: str, meeting_id: str, action_taken: str = "Pending", join_url: str = None) -> int:
+def add_submission(email: str, telegram_id: int, zoom_name: str, telegram_username: str, meeting_id: str, action_taken: str = "Pending", join_url: str = None, country: str = None) -> int:
     """
     Records a new submission history log. 
     Inserts a user profile into the 'users' table if they do not exist.
@@ -319,29 +326,29 @@ def add_submission(email: str, telegram_id: int, zoom_name: str, telegram_userna
                     cursor,
                     """
                     UPDATE users 
-                    SET telegram_id = ?, global_status = ?, join_url = ?, updated_at = CURRENT_TIMESTAMP
+                    SET telegram_id = ?, global_status = ?, join_url = ?, country = COALESCE(?, country), updated_at = CURRENT_TIMESTAMP
                     WHERE LOWER(registered_email) = LOWER(?)
                     """,
-                    (telegram_id, new_status, join_url, email)
+                    (telegram_id, new_status, join_url, country, email)
                 )
             else:
                 execute_query(
                     cursor,
                     """
                     UPDATE users 
-                    SET telegram_id = ?, global_status = ?, updated_at = CURRENT_TIMESTAMP
+                    SET telegram_id = ?, global_status = ?, country = COALESCE(?, country), updated_at = CURRENT_TIMESTAMP
                     WHERE LOWER(registered_email) = LOWER(?)
                     """,
-                    (telegram_id, new_status, email)
+                    (telegram_id, new_status, country, email)
                 )
         else:
             execute_query(
                 cursor,
                 """
-                INSERT INTO users (registered_email, telegram_id, global_status, join_url)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO users (registered_email, telegram_id, global_status, join_url, country)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (email, telegram_id, action_taken, join_url)
+                (email, telegram_id, action_taken, join_url, country)
             )
             
         # Log to submissions_history
