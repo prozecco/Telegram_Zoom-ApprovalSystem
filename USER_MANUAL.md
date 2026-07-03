@@ -109,3 +109,18 @@ If your host email is suspended, you must create a new Server-to-Server OAuth ap
    * **`Set Account ID`**
 4. Update the **Meeting ID** and **Registration Link** with a newly created meeting.
 5. Tap **`Back to panel 🛡️`** to refresh and confirm the health indicators are green!
+
+---
+
+## 🛠️ 5. Zoom Sync & Legacy Approvals
+
+If you have legacy registrants who signed up directly through your Zoom registration link but did not submit their details via the Telegram bot, use these administrative commands in the admin chat to synchronize or bulk-approve them:
+
+### `/synczoom` (Sync Registrants from Zoom)
+*   **What it does**: Fetches the list of all registrants (`pending`, `approved`, and `denied`) directly from the Zoom meeting API and writes them into the bot database.
+*   **Use case**: Use this if you want to import existing registrants into the bot's tracking database.
+
+### `/approveall` (Bulk Approve on Zoom)
+*   **What it does**: Automatically fetches all currently pending registrants from Zoom, bulk-approves them directly on the Zoom API, and registers their profiles in your database as Approved.
+*   **Use case**: Use this when switching meeting IDs or if users registered on the web link and need immediate approval without requesting via the Telegram bot first.
+

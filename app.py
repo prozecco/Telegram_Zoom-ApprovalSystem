@@ -1277,13 +1277,18 @@ async def search_input_received(update: Update, context: ContextTypes.DEFAULT_TY
     
     tg_link = f'<a href="tg://user?id={telegram_id}">Open Telegram Chat 💬</a>' if telegram_id else "<i>No Telegram ID linked.</i>"
     
+    if not telegram_id or telegram_id == 0 or str(telegram_id) == "0":
+        tg_line = f"- <b>Telegram:</b> 🌐 Direct Zoom Web Registration (No Telegram account linked)\n"
+    else:
+        tg_line = f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id}</code>) 🤖 Bot Request\n"
+        
     card = (
         f"🔍 <b>Search Result: User Profile Found</b>\n\n"
         f"{blacklist_warning}"
         f"👤 <b>User Details:</b>\n"
         f"- <b>Zoom Name:</b> <code>{html.escape(zoom_name)}</code>\n"
         f"- <b>Registered Email:</b> <code>{html.escape(email)}</code>\n"
-        f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id}</code>)\n\n"
+        f"{tg_line}\n"
         f"📊 <b>History Summary:</b> {history_summary}\n"
         f"📝 <b>Notes Preview:</b> {html.escape(notes_preview)}\n"
         f"🟡 <b>Current Status:</b> {status_text}\n"
@@ -1385,7 +1390,7 @@ async def config_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     """
     Entry point to configuration conversation flow.
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
         return ConversationHandler.END
     return await show_config_menu(update, context)
@@ -1783,11 +1788,69 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ADMINISTRATIVE COMMANDS
 # ==========================================
 
+async def approveall_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Approves all pending registrants directly on the Zoom meeting, even if they did not request via Telegram.
+    """
+    if not storage.is_admin(update.effective_user.id):
+        await update.message.reply_text("Unauthorized access.")
+        return
+        
+    status_msg = await update.message.reply_text("⏳ Fetching pending registrants from Zoom...")
+    
+    try:
+        pending_registrants = zoom_service.list_registrants(status="pending")
+        if not pending_registrants:
+            await status_msg.edit_text("✅ There are no pending registrants on Zoom for this meeting.")
+            return
+            
+        count = len(pending_registrants)
+        await status_msg.edit_text(f"Found {count} pending registrants. Approving them now...")
+        
+        approved_count = 0
+        for reg in pending_registrants:
+            email = reg.get("email")
+            first_name = reg.get("first_name", "")
+            last_name = reg.get("last_name", "")
+            zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
+            
+            try:
+                # 1. Approve on Zoom
+                zoom_service.update_registrant_status(email, action="approve")
+                
+                # 2. Log to database as a manual/Zoom-only profile
+                user_rec = storage.get_user_by_email(email)
+                if not user_rec:
+                    # Create a profile
+                    storage.add_submission(
+                        email=email,
+                        telegram_id=None,
+                        zoom_name=zoom_name,
+                        telegram_username="Zoom_Direct",
+                        meeting_id=zoom_service.meeting_id,
+                        action_taken="Approved"
+                    )
+                else:
+                    # Update existing profile status to Approved
+                    storage.update_user_status(email, "Approved")
+                    
+                approved_count += 1
+            except Exception as e:
+                logger.error("Failed to approve %s: %s", email, e)
+                
+        await status_msg.edit_text(
+            f"🎉 Done! Successfully approved {approved_count} out of {count} pending registrants directly on Zoom.\n"
+            "Their profiles have been logged/updated in the database."
+        )
+    except Exception as e:
+        logger.exception("Error in approveall command")
+        await status_msg.edit_text(f"❌ Failed to run bulk approval: {str(e)}")
+
 async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Generates a system report for the admin.
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
@@ -1876,7 +1939,7 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     Allows admin to manually blacklist an email.
     Usage: /blacklist <email/id/username/zoom_name> [notes]
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
@@ -1917,7 +1980,7 @@ async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     Allows admin to attach custom notes to a user profile.
     Usage: /notes <email/id/username/zoom_name> <notes_text>
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
@@ -1945,15 +2008,14 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     """
     Lists all registration requests in the database with page-by-page pagination (10 per page).
     """
-    chat_id = update.effective_chat.id
-    if not storage.is_admin(chat_id):
+    if not storage.is_admin(update.effective_user.id):
         await reply_helper(update, "Unauthorized access.")
         return
         
     with storage.get_db() as conn:
         cursor = conn.execute(
             """
-            SELECT u.registered_email, u.global_status, 
+            SELECT u.registered_email, u.global_status, u.telegram_id,
                    (SELECT s.submitted_zoom_name FROM submissions_history s 
                     WHERE s.registered_email = u.registered_email 
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name
@@ -1992,6 +2054,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         email = row["registered_email"]
         status = row["global_status"]
         name = row["zoom_name"] or "Unknown (Manual Profile)"
+        telegram_id = row.get("telegram_id")
         
         # Get latest submission ID for this email
         with storage.get_db() as conn2:
@@ -2011,7 +2074,8 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         }
         emoji = status_emojis.get(status, "⚪")
         
-        message += f"- {emoji} {html.escape(name)} (<code>{html.escape(email)}</code>) [<i>{status}</i>]\n"
+        connection_type = "🌐 Zoom-Only" if (not telegram_id or telegram_id == 0) else "🤖 Bot"
+        message += f"- {emoji} {html.escape(name)} (<code>{html.escape(email)}</code>) [<i>{status}</i>] (<i>{connection_type}</i>)\n"
         keyboard.append([InlineKeyboardButton(f"{emoji} Review: {name}", callback_data=f"reviewreq_{sub_id}")])
         
     # Navigation row
@@ -2037,7 +2101,7 @@ async def admin_name_changes_command(update: Update, context: ContextTypes.DEFAU
     """
     Lists all pending Zoom name change requests.
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await reply_helper(update, "Unauthorized access.")
         return
         
@@ -2149,7 +2213,7 @@ async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     Pulls up the full interactive admin decision card for any email.
     Usage: /review <email/id/username/zoom_name>
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
@@ -2237,6 +2301,11 @@ async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     status_text = status_emojis.get(global_status, f"{global_status}")
     
+    if not telegram_id or telegram_id == 0 or str(telegram_id) == "0":
+        tg_line = f"- <b>Telegram:</b> 🌐 Direct Zoom Web Registration (No Telegram account linked)\n"
+    else:
+        tg_line = f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id}</code>) 🤖 Bot Request\n"
+        
     admin_message = (
         f"🔔 <b>Zoom Registration Request Panel</b>\n\n"
         f"{blacklist_warning}"
@@ -2244,7 +2313,7 @@ async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"👤 <b>User Details:</b>\n"
         f"- <b>Zoom Name:</b> <code>{html.escape(zoom_name)}</code>\n"
         f"- <b>Registered Email:</b> <code>{html.escape(email)}</code>\n"
-        f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id or 'None'}</code>)\n"
+        f"{tg_line}"
         f"{tg_history_line}\n"
         f"📊 <b>History Summary:</b> {history_summary}\n"
         f"📝 <b>Notes Preview:</b> {html.escape(notes_preview)}\n\n"
@@ -2260,7 +2329,7 @@ async def deleteuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     Deletes the user profile and their submission logs entirely from the database.
     Usage: /deleteuser <email/id/username/zoom_name>
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
@@ -2289,7 +2358,7 @@ async def clearhistory_command(update: Update, context: ContextTypes.DEFAULT_TYP
     Deletes submission history records for a user, resetting application count to 0.
     Usage: /clearhistory <email/id/username/zoom_name>
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
@@ -2317,7 +2386,7 @@ async def clearnotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     Clears the behavior notes of a user profile.
     Usage: /clearnotes <email/id/username/zoom_name>
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
@@ -2344,7 +2413,7 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """
     Retrieves all registrants for the active meeting from Zoom and synchronizes them.
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
@@ -2403,7 +2472,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """
     Displays help instructions for the admin.
     """
-    if not storage.is_admin(update.effective_chat.id):
+    if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text(
             "Welcome! Please select an action from the bot main menu. Type /start to open the menu."
         )
@@ -2594,6 +2663,7 @@ def main() -> None:
     application.add_handler(CommandHandler("clearhistory", clearhistory_command))
     application.add_handler(CommandHandler("clearnotes", clearnotes_command))
     application.add_handler(CommandHandler("synczoom", synczoom_command))
+    application.add_handler(CommandHandler("approveall", approveall_command))
 
     # 6. Start Polling
     logger.info("Telegram Bot starts polling...")
