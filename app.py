@@ -32,13 +32,16 @@ zoom_service = ZoomService()
 AWAIT_ZOOM_NAME, AWAIT_EMAIL, AWAIT_CONFIRMATION = range(3)
 
 # Conversation states for Configuration Flow
-AWAIT_CONFIG_CHOICE, AWAIT_MID_INPUT, AWAIT_LINK_INPUT = range(3, 6)
+AWAIT_CONFIG_CHOICE, AWAIT_MID_INPUT, AWAIT_LINK_INPUT, AWAIT_CLIENT_ID_INPUT, AWAIT_CLIENT_SECRET_INPUT, AWAIT_ACCOUNT_ID_INPUT = range(3, 9)
 
 # Conversation states for Admin Rights Management Flow
-AWAIT_ADMIN_MANAGE_CHOICE, AWAIT_ADD_ADMIN_INPUT, AWAIT_REMOVE_ADMIN_CHOICE = range(6, 9)
+AWAIT_ADMIN_MANAGE_CHOICE, AWAIT_ADD_ADMIN_INPUT, AWAIT_REMOVE_ADMIN_CHOICE = range(9, 12)
 
 # Conversation states for User Name Change Flow
-AWAIT_NEW_NAME_INPUT = 9
+AWAIT_NEW_NAME_INPUT = 12
+
+# Conversation states for User Search Flow
+AWAIT_SEARCH_INPUT = 13
 
 # ==========================================
 # HEALTH CHECK HTTP SERVER FOR HUGGING FACE
@@ -80,6 +83,47 @@ async def reply_helper(update: Update, text: str, reply_markup=None) -> None:
     elif update.callback_query:
         await update.callback_query.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
+# Helper to generate the main Admin Control Panel inline keyboard markup
+def get_admin_panel_markup() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 View Requests List", callback_data="admin_requests"),
+            InlineKeyboardButton("✏️ View Name Changes", callback_data="admin_name_changes")
+        ],
+        [
+            InlineKeyboardButton("🔍 Search User", callback_data="admin_search"),
+            InlineKeyboardButton("⚙️ Configure Zoom", callback_data="admin_config")
+        ],
+        [
+            InlineKeyboardButton("📊 System Report", callback_data="admin_report"),
+            InlineKeyboardButton("👤 Manage Admins", callback_data="admin_manage")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# Helper to generate the main User Menu inline keyboard markup
+def get_user_menu_markup(user_id: int) -> InlineKeyboardMarkup:
+    mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
+    is_https_webapp = mini_app_url.lower().startswith("https://")
+    registration_link = storage.get_setting("zoom_registration_link", config.ZOOM_REGISTRATION_LINK)
+    
+    first_row = []
+    if is_https_webapp:
+        first_row.append(InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)))
+    else:
+        first_row.append(InlineKeyboardButton("🔗 Register on Zoom", url=registration_link))
+        
+    first_row.append(InlineKeyboardButton("📝 Request Approval", callback_data="user_register"))
+    
+    keyboard = [first_row]
+    
+    user_record = storage.get_user_by_telegram_id(user_id)
+    if user_record and user_record["global_status"] == "Approved":
+        keyboard.append([InlineKeyboardButton("✏️ Request Name Change", callback_data="user_name_change")])
+        
+    keyboard.append([InlineKeyboardButton("ℹ️ How It Works", callback_data="user_help")])
+    return InlineKeyboardMarkup(keyboard)
+
 # Helper to generate the administrative inline keyboard (standard registration)
 def get_admin_keyboard(sub_id: int) -> InlineKeyboardMarkup:
     keyboard = [
@@ -100,6 +144,79 @@ def get_admin_keyboard(sub_id: int) -> InlineKeyboardMarkup:
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+_zoom_health_cache = None
+_zoom_health_cache_time = 0.0
+
+def get_zoom_health() -> tuple[str, str]:
+    global _zoom_health_cache, _zoom_health_cache_time
+    import time
+    if _zoom_health_cache and (time.time() - _zoom_health_cache_time < 30):
+        return _zoom_health_cache
+        
+    try:
+        # 1. Test token acquisition
+        token = zoom_service._get_access_token()
+        api_status = "Healthy 🟢"
+    except Exception as e:
+        err_msg = str(e)
+        if "invalid_client" in err_msg or "Invalid client_id" in err_msg:
+            api_status = "Error 🔴 (Invalid Credentials)"
+        else:
+            api_status = "Error 🔴 (Connection Failed)"
+        _zoom_health_cache = (api_status, "Broken 🔴 (API Auth Failed)")
+        _zoom_health_cache_time = time.time()
+        return _zoom_health_cache
+        
+    try:
+        # 2. Test meeting lookup
+        meeting_id = zoom_service.meeting_id
+        url = f"https://api.zoom.us/v2/meetings/{meeting_id}/registrants"
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+        import requests
+        res = requests.get(url, headers=headers, params={"page_size": 1}, timeout=5)
+        if res.status_code in (200, 201):
+            meeting_status = "Active 🟢"
+        else:
+            logger.warning("Zoom meeting health check failed: status=%s, response=%s", res.status_code, res.text)
+            if res.status_code == 404:
+                meeting_status = "Broken 🔴 (Meeting Not Found)"
+            elif res.status_code == 400:
+                meeting_status = "Broken 🔴 (Invalid Meeting ID)"
+            else:
+                meeting_status = f"Broken 🔴 (Status {res.status_code})"
+    except Exception as e:
+        logger.exception("Zoom meeting health check exception")
+        meeting_status = "Error 🔴"
+        
+    _zoom_health_cache = (api_status, meeting_status)
+    _zoom_health_cache_time = time.time()
+    return _zoom_health_cache
+
+def get_admin_panel_text(user_first_name: str, bot_hosting: str, db_type: str) -> str:
+    api_status, meeting_status = get_zoom_health()
+    return (
+        f"🛡️ <b>Admin Control Panel</b>\n\n"
+        f"🌐 <b>Bot Hosting:</b> <code>{bot_hosting}</code>\n"
+        f"🗄️ <b>Database:</b> <code>{db_type}</code>\n"
+        f"🔑 <b>Zoom API Status:</b> <code>{api_status}</code>\n"
+        f"📅 <b>Zoom Meeting:</b> <code>{meeting_status}</code>\n\n"
+        f"Welcome back, <b>{html.escape(user_first_name)}</b>!\n"
+        "Please select a management task from the menu below:"
+    )
+
+def get_admin_panel_back_text(bot_hosting: str, db_type: str) -> str:
+    api_status, meeting_status = get_zoom_health()
+    return (
+        f"🛡️ <b>Admin Control Panel</b>\n\n"
+        f"🌐 <b>Bot Hosting:</b> <code>{bot_hosting}</code>\n"
+        f"🗄️ <b>Database:</b> <code>{db_type}</code>\n"
+        f"🔑 <b>Zoom API Status:</b> <code>{api_status}</code>\n"
+        f"📅 <b>Zoom Meeting:</b> <code>{meeting_status}</code>\n\n"
+        "Welcome back. Please select a task from the menu below:"
+    )
 
 # ==========================================
 # USER & ADMIN MAIN MENUS
@@ -126,41 +243,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         elif "RENDER" in os.environ:
             bot_hosting = "Cloud (Render)"
 
-        # Admin Control Panel Menu
-        keyboard = [
-            [
-                InlineKeyboardButton("📋 View Requests List", callback_data="admin_requests"),
-                InlineKeyboardButton("✏️ View Name Changes", callback_data="admin_name_changes")
-            ],
-            [
-                InlineKeyboardButton("⚙️ Configure Zoom", callback_data="admin_config"),
-                InlineKeyboardButton("📊 System Report", callback_data="admin_report")
-            ],
-            [
-                InlineKeyboardButton("👤 Manage Admins", callback_data="admin_manage")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = get_admin_panel_markup()
         
+        admin_text = get_admin_panel_text(user.first_name, bot_hosting, db_type)
         await update.message.reply_text(
-            f"🛡️ <b>Admin Control Panel</b>\n\n"
-            f"🌐 <b>Bot Hosting:</b> <code>{bot_hosting}</code>\n"
-            f"🗄️ <b>Database:</b> <code>{db_type}</code>\n\n"
-            f"Welcome back, <b>{html.escape(user.first_name)}</b>!\n"
-            "Please select a management task from the menu below:",
+            admin_text,
             reply_markup=reply_markup,
             parse_mode="HTML"
         )
     else:
         # Regular User Main Menu
-        mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
-        keyboard = [
-            [
-                InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
-                InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
-            ]
-        ]
-        
         # Check if the user already has a registration record in database
         user_record = storage.get_user_by_telegram_id(user.id)
         status_message = ""
@@ -170,10 +262,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             history = storage.get_submissions_by_email(email)
             zoom_name = history[0]["submitted_zoom_name"] if history else "Zoom Applicant"
             
-            # Show name change option if approved
-            if status == "Approved":
-                keyboard.append([InlineKeyboardButton("✏️ Request Name Change", callback_data="user_name_change")])
-                
             status_emojis = {
                 "Pending": "🟡 Pending review",
                 "Approved": "🟢 Approved",
@@ -188,8 +276,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 f"- <b>Status:</b> {status_text}\n\n"
             )
             
-        keyboard.append([InlineKeyboardButton("ℹ️ How It Works", callback_data="user_help")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = get_user_menu_markup(user.id)
         
         await update.message.reply_text(
             f"Welcome <b>{html.escape(user.first_name)}</b> to the Telegram & Zoom Automated Approval System! 🚀\n\n"
@@ -233,14 +320,6 @@ async def user_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="HTML"
         )
     elif query.data == "back_to_user_menu":
-        mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
-        keyboard = [
-            [
-                InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
-                InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
-            ]
-        ]
-        
         user_id = query.from_user.id
         user_record = storage.get_user_by_telegram_id(user_id)
         status_message = ""
@@ -250,9 +329,6 @@ async def user_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             history = storage.get_submissions_by_email(email)
             zoom_name = history[0]["submitted_zoom_name"] if history else "Zoom Applicant"
             
-            if status == "Approved":
-                keyboard.append([InlineKeyboardButton("✏️ Request Name Change", callback_data="user_name_change")])
-                
             status_emojis = {
                 "Pending": "🟡 Pending review",
                 "Approved": "🟢 Approved",
@@ -267,8 +343,7 @@ async def user_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"- <b>Status:</b> {status_text}\n\n"
             )
             
-        keyboard.append([InlineKeyboardButton("ℹ️ How It Works", callback_data="user_help")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = get_user_menu_markup(user_id)
         
         await query.message.reply_text(
             f"{status_message}"
@@ -433,6 +508,33 @@ async def submit_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         is_blacklisted = (user_record.get("global_status") == "Blacklisted")
         behavior_notes = user_record.get("behavior_notes") or ""
         
+    # Check if this Telegram ID has other associated email profiles
+    other_profiles = []
+    with storage.get_db() as conn:
+        cursor = conn.execute(
+            "SELECT registered_email, global_status, behavior_notes FROM users WHERE telegram_id = ? AND LOWER(registered_email) != LOWER(?)",
+            (telegram_id, email)
+        )
+        other_profiles = [dict(row) for row in cursor.fetchall()]
+        
+    tg_warning = ""
+    tg_history_line = ""
+    if other_profiles:
+        profile_states = []
+        for p in other_profiles:
+            profile_states.append(f"{p['registered_email']} ({p['global_status']})")
+            if p['global_status'] == "Blacklisted":
+                is_blacklisted = True
+                tg_warning += f"🚨 <b>WARNING: Linked Telegram ID has a BLACKLISTED email: <code>{p['registered_email']}</code>!</b>\n\n"
+            elif p['global_status'] == "Denied":
+                tg_warning += f"⚠️ <b>WARNING: Linked Telegram ID was previously DENIED under email: <code>{p['registered_email']}</code>!</b>\n\n"
+            
+            # Carry over behavior notes if any
+            if p['behavior_notes'] and not behavior_notes:
+                behavior_notes = f"[From linked profile {p['registered_email']}] {p['behavior_notes']}"
+                
+        tg_history_line = f"- <b>Linked Telegram Profiles:</b> {', '.join(profile_states)}\n"
+        
     active_meeting_id = storage.get_setting("zoom_meeting_id", config.ZOOM_MEETING_ID)
         
     # Log submission to history
@@ -470,10 +572,12 @@ async def submit_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     admin_message = (
         f"🔔 <b>New Zoom Registration Request</b>\n\n"
         f"{blacklist_warning}"
+        f"{tg_warning}"
         f"👤 <b>User Details:</b>\n"
         f"- <b>Zoom Name:</b> <code>{html.escape(zoom_name)}</code>\n"
         f"- <b>Email:</b> <code>{html.escape(email)}</code>\n"
-        f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id}</code>)\n\n"
+        f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id}</code>)\n"
+        f"{tg_history_line}\n"
         f"📊 <b>History Summary:</b> {history_summary}\n"
         f"📝 <b>Notes Preview:</b> {html.escape(notes_preview)}\n\n"
         "Please choose an action:"
@@ -481,9 +585,9 @@ async def submit_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     reply_markup = get_admin_keyboard(sub_id)
     
-    # Send decision card to Admin Chat ID
+    # Send decision card to Notification Chat ID
     await context.bot.send_message(
-        chat_id=config.ADMIN_CHAT_ID,
+        chat_id=config.NOTIFICATION_CHAT_ID,
         text=admin_message,
         reply_markup=reply_markup,
         parse_mode="HTML"
@@ -511,17 +615,7 @@ async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     context.user_data.clear()
     
-    mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
-    keyboard = [
-        [
-            InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
-            InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
-        ],
-        [
-            InlineKeyboardButton("ℹ️ How It Works", callback_data="user_help")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = get_user_menu_markup(query.from_user.id)
     await query.message.reply_text(
         "❌ Registration cancelled.\n\n"
         "Please select an option from the menu below to get started:",
@@ -675,7 +769,7 @@ async def submit_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await context.bot.send_message(
-        chat_id=config.ADMIN_CHAT_ID,
+        chat_id=config.NOTIFICATION_CHAT_ID,
         text=admin_message,
         reply_markup=reply_markup,
         parse_mode="HTML"
@@ -686,17 +780,7 @@ async def submit_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.clear()
     
     # Back to user menu
-    mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
-    keyboard_user = [
-        [
-            InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
-            InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
-        ],
-        [
-            InlineKeyboardButton("ℹ️ How It Works", callback_data="user_help")
-        ]
-    ]
-    reply_markup_user = InlineKeyboardMarkup(keyboard_user)
+    reply_markup_user = get_user_menu_markup(query.from_user.id)
     await query.message.reply_text(
         "Return to main menu:",
         reply_markup=reply_markup_user
@@ -712,17 +796,7 @@ async def cancel_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.answer()
         context.user_data.clear()
         
-        mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
-        keyboard = [
-            [
-                InlineKeyboardButton("🔗 Register via Mini App", web_app=WebAppInfo(url=mini_app_url)),
-                InlineKeyboardButton("📝 Request Approval", callback_data="user_register")
-            ],
-            [
-                InlineKeyboardButton("ℹ️ How It Works", callback_data="user_help")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = get_user_menu_markup(query.from_user.id)
         await query.message.reply_text(
             "❌ Name change request cancelled.\n\n"
             "Return to main menu:",
@@ -888,7 +962,7 @@ async def admin_decision_callback(update: Update, context: ContextTypes.DEFAULT_
         elif action == "editnotes":
             await query.answer()
             await context.bot.send_message(
-                chat_id=config.ADMIN_CHAT_ID,
+                chat_id=config.NOTIFICATION_CHAT_ID,
                 text=(
                     f"📝 <b>Edit Notes for {html.escape(email)}</b>\n\n"
                     "Tap the command below to copy it, add your notes, and send:\n"
@@ -1031,6 +1105,226 @@ async def view_full_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.message.reply_text(details, parse_mode="HTML")
 
 # ==========================================
+# USER SEARCH FLOW (ADMIN ONLY)
+# ==========================================
+
+async def start_search_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Entry point to admin user search flow.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [[InlineKeyboardButton("Cancel ❌", callback_data="back_to_admin_panel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.message.reply_text(
+        "🔍 <b>User Search Panel</b>\n\n"
+        "Please type the user's <b>Telegram ID</b>, <b>Username</b> (starting with @), or <b>Registered Email</b> to search:",
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+    )
+    return AWAIT_SEARCH_INPUT
+
+async def search_input_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Processes the search input, looking up database records or live profile info.
+    """
+    query_text = update.message.text.strip()
+    
+    if not query_text:
+        await update.message.reply_text("⚠️ Search query cannot be empty. Please type again:")
+        return AWAIT_SEARCH_INPUT
+        
+    user_record = None
+    email_query = query_text.lower()
+    
+    # 1. Search by Telegram ID (if numeric)
+    if query_text.isdigit():
+        tg_id = int(query_text)
+        user_record = storage.get_user_by_telegram_id(tg_id)
+    
+    # 2. Search by Email
+    if not user_record and "@" in query_text and "." in query_text:
+        user_record = storage.get_user_by_email(email_query)
+        
+    # 3. Search by Username
+    if not user_record:
+        username_clean = query_text.lstrip("@").lower()
+        with storage.get_db() as conn:
+            cursor = conn.execute(
+                """
+                SELECT registered_email FROM submissions_history 
+                WHERE LOWER(submitted_telegram_username) = ? 
+                LIMIT 1
+                """,
+                (username_clean,)
+            )
+            row = cursor.fetchone()
+            if row:
+                user_record = storage.get_user_by_email(row["registered_email"])
+                
+    # 4. Search by Zoom Name
+    if not user_record:
+        zoom_clean = query_text.lower()
+        with storage.get_db() as conn:
+            cursor = conn.execute(
+                """
+                SELECT DISTINCT registered_email FROM submissions_history 
+                WHERE LOWER(submitted_zoom_name) = ? OR LOWER(submitted_zoom_name) LIKE ?
+                LIMIT 5
+                """,
+                (zoom_clean, f"%{zoom_clean}%")
+            )
+            rows = cursor.fetchall()
+            
+        if len(rows) > 1:
+            message = f"🔍 <b>Multiple matches found for Zoom Name:</b> <code>{html.escape(query_text)}</code>\n\n"
+            keyboard = []
+            for row in rows:
+                email = row["registered_email"]
+                history = storage.get_submissions_by_email(email)
+                zoom_name = history[0]["submitted_zoom_name"] if history else "Unknown"
+                sub_id = history[0]["id"] if history else 0
+                
+                message += f"- {html.escape(zoom_name)} (<code>{html.escape(email)}</code>)\n"
+                keyboard.append([InlineKeyboardButton(f"Review: {zoom_name}", callback_data=f"reviewreq_{sub_id}")])
+                
+            keyboard.append([InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="HTML")
+            return ConversationHandler.END
+        elif len(rows) == 1:
+            user_record = storage.get_user_by_email(rows[0]["registered_email"])
+                
+    if not user_record:
+        # Live Telegram ID lookup (if query is numeric ID)
+        if query_text.isdigit():
+            tg_id = int(query_text)
+            try:
+                chat = await context.bot.get_chat(tg_id)
+                first_name = chat.first_name
+                last_name = chat.last_name
+                username = chat.username
+                full_name = f"{first_name or ''} {last_name or ''}".strip()
+                display_name = f"{full_name} (@{username})" if username else full_name
+                
+                keyboard = [[InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    f"🔍 <b>Telegram Profile Found (Not in DB):</b>\n\n"
+                    f"👤 <b>Name:</b> {html.escape(display_name)}\n"
+                    f"🆔 <b>ID:</b> <code>{tg_id}</code>\n"
+                    f"🔗 <b>Chat Link:</b> <a href=\"tg://user?id={tg_id}\">Click to open chat 💬</a>\n\n"
+                    "<i>This user has never submitted an approval request.</i>",
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
+                )
+                return ConversationHandler.END
+            except Exception:
+                pass
+                
+        keyboard = [
+            [
+                InlineKeyboardButton("Try Again 🔄", callback_data="admin_search"),
+                InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"❌ <b>No records found</b> for <code>{html.escape(query_text)}</code>.",
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+        return ConversationHandler.END
+
+    # Profile found in database
+    email = user_record["registered_email"]
+    telegram_id = user_record["telegram_id"]
+    global_status = user_record["global_status"]
+    behavior_notes = user_record["behavior_notes"] or ""
+    
+    history = storage.get_submissions_by_email(email)
+    if history:
+        latest = history[0]
+        sub_id = latest["id"]
+        zoom_name = latest["submitted_zoom_name"]
+        telegram_username = latest["submitted_telegram_username"]
+        submission_count = len(history)
+        history_summary = f"Applied {submission_count} times." if submission_count > 1 else "First-time applicant."
+    else:
+        sub_id = 0
+        zoom_name = "Manual User Profile"
+        telegram_username = "None"
+        history_summary = "No submissions logged."
+        
+    notes_preview = "None"
+    if behavior_notes:
+        notes_preview = behavior_notes.split("\n")[0][:40] + "..." if len(behavior_notes) > 40 else behavior_notes.split("\n")[0]
+        
+    blacklist_warning = ""
+    if global_status == "Blacklisted":
+        blacklist_warning = "🚨 <b>WARNING: THIS USER IS BLACKLISTED!</b>\n\n"
+        
+    status_emojis = {
+        "Pending": "🟡 Pending review.",
+        "Approved": "🟢 Approved by admin.",
+        "Denied": "🔴 Denied by admin.",
+        "Blacklisted": "🚫 Blacklisted.",
+        "Deferred": "⏳ Deferred (Review Later)."
+    }
+    status_text = status_emojis.get(global_status, f"{global_status}")
+    
+    tg_link = f'<a href="tg://user?id={telegram_id}">Open Telegram Chat 💬</a>' if telegram_id else "<i>No Telegram ID linked.</i>"
+    
+    card = (
+        f"🔍 <b>Search Result: User Profile Found</b>\n\n"
+        f"{blacklist_warning}"
+        f"👤 <b>User Details:</b>\n"
+        f"- <b>Zoom Name:</b> <code>{html.escape(zoom_name)}</code>\n"
+        f"- <b>Registered Email:</b> <code>{html.escape(email)}</code>\n"
+        f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id}</code>)\n\n"
+        f"📊 <b>History Summary:</b> {history_summary}\n"
+        f"📝 <b>Notes Preview:</b> {html.escape(notes_preview)}\n"
+        f"🟡 <b>Current Status:</b> {status_text}\n"
+        f"🔗 <b>Direct Link:</b> {tg_link}\n\n"
+        "Please choose an action:"
+    )
+    
+    reply_markup = get_admin_keyboard(sub_id if sub_id > 0 else 0)
+    await update.message.reply_text(card, reply_markup=reply_markup, parse_mode="HTML")
+    return ConversationHandler.END
+
+async def cancel_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Cancels search flow and returns to main Admin Menu.
+    """
+    # Redirect to Admin Panel start
+    query = update.callback_query
+    if query:
+        await query.answer()
+        db_type = "Cloud PostgreSQL (Supabase)" if storage.IS_POSTGRES else "Local SQLite (database.db)"
+        bot_hosting = "Local Machine"
+        if "PORT" in os.environ:
+            if "SPACE_ID" in os.environ or "SPACE_OWNER" in os.environ:
+                bot_hosting = "Cloud (Hugging Face Spaces)"
+            else:
+                bot_hosting = "Cloud (Render/PaaS)"
+        elif "RENDER" in os.environ:
+            bot_hosting = "Cloud (Render)"
+
+        reply_markup = get_admin_panel_markup()
+        admin_text = get_admin_panel_back_text(bot_hosting, db_type)
+        await query.message.reply_text(
+            admin_text,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text("Search cancelled.")
+    return ConversationHandler.END
+
+# ==========================================
 # ADMIN CONFIGURATION FLOW
 # ==========================================
 
@@ -1041,10 +1335,23 @@ async def show_config_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     meeting_id = storage.get_setting("zoom_meeting_id", config.ZOOM_MEETING_ID)
     registration_link = storage.get_setting("zoom_registration_link", config.ZOOM_REGISTRATION_LINK)
     
+    # Zoom S2S Credentials
+    client_id = storage.get_setting("zoom_client_id", config.ZOOM_CLIENT_ID)
+    client_secret = storage.get_setting("zoom_client_secret", config.ZOOM_CLIENT_SECRET)
+    account_id = storage.get_setting("zoom_account_id", config.ZOOM_ACCOUNT_ID)
+    
     keyboard = [
         [
             InlineKeyboardButton("Change Meeting ID 🆔", callback_data="set_mid"),
-            InlineKeyboardButton("Change Invite Link 🔗", callback_data="set_link")
+            InlineKeyboardButton("Change Registration Link 🔗", callback_data="set_link")
+        ],
+        [
+            InlineKeyboardButton("Set Client ID 🔑", callback_data="set_cid"),
+            InlineKeyboardButton("Set Client Secret 🔒", callback_data="set_secret")
+        ],
+        [
+            InlineKeyboardButton("Set Account ID 👤", callback_data="set_aid"),
+            InlineKeyboardButton("📘 Recovery Manual", callback_data="zoom_recovery_manual")
         ],
         [
             InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")
@@ -1052,10 +1359,22 @@ async def show_config_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
+    def mask_val(val: str) -> str:
+        if not val:
+            return "Not Set ❌"
+        val = str(val).strip()
+        if len(val) <= 6:
+            return "***"
+        return f"{val[:3]}***{val[-3:]}"
+
     message = (
-        "⚙️ <b>Zoom Configuration Settings:</b>\n\n"
+        "⚙️ <b>Zoom Configuration & API Settings:</b>\n\n"
         f"🆔 <b>Meeting ID:</b> <code>{html.escape(meeting_id)}</code>\n"
-        f"🔗 <b>Invite Link:</b> <code>{html.escape(registration_link)}</code>\n\n"
+        f"🔗 <b>Registration Link:</b> <code>{html.escape(registration_link)}</code>\n\n"
+        f"🔑 <b>Zoom S2S Credentials:</b>\n"
+        f"- <b>Client ID:</b> <code>{html.escape(mask_val(client_id))}</code>\n"
+        f"- <b>Client Secret:</b> <code>{html.escape(mask_val(client_secret))}</code>\n"
+        f"- <b>Account ID:</b> <code>{html.escape(mask_val(account_id))}</code>\n\n"
         "Select an option below to update them:"
     )
     
@@ -1090,6 +1409,53 @@ async def config_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             parse_mode="HTML"
         )
         return AWAIT_LINK_INPUT
+    elif query.data == "set_cid":
+        await query.message.reply_text(
+            "✍️ Please type the new <b>Zoom Client ID</b>:",
+            parse_mode="HTML"
+        )
+        return AWAIT_CLIENT_ID_INPUT
+    elif query.data == "set_secret":
+        await query.message.reply_text(
+            "✍️ Please type the new <b>Zoom Client Secret</b>:",
+            parse_mode="HTML"
+        )
+        return AWAIT_CLIENT_SECRET_INPUT
+    elif query.data == "set_aid":
+        await query.message.reply_text(
+            "✍️ Please type the new <b>Zoom Account ID</b>:",
+            parse_mode="HTML"
+        )
+        return AWAIT_ACCOUNT_ID_INPUT
+    elif query.data == "zoom_recovery_manual":
+        recovery_text = (
+            "📘 <b>Zoom OAuth App Recovery Guide</b>\n\n"
+            "To restore the bot's Zoom integration after account suspension, you can view the complete, detailed step-by-step recovery guide with screenshots on Telegra.ph (loads instantly in Telegram):\n\n"
+            "🔗 <a href=\"https://telegra.ph/Zoom-OAuth-App-Recovery-Guide-07-02-2\">Open Illustrated Recovery Manual</a>\n\n"
+            "💡 <b>Granular Scope Checklist (Make sure to select all 10 scopes in the Meetings section):</b>\n"
+            "1️⃣ <code>meeting:write:registrant:admin</code>\n"
+            "2️⃣ <code>meeting:write:batch_registrants:admin</code>\n"
+            "3️⃣ <code>meeting:write:invite_links:admin</code>\n"
+            "4️⃣ <code>meeting:delete:registrant:admin</code>\n"
+            "5️⃣ <code>meeting:update:registrant_status:admin</code>\n"
+            "6️⃣ <code>meeting:update:registration_question:admin</code>\n"
+            "7️⃣ <code>meeting:read:participant:admin</code>\n"
+            "8️⃣ <code>meeting:read:registrant:admin</code>\n"
+            "9️⃣ <code>meeting:read:list_registrants:admin</code>\n"
+            "🔟 <code>meeting:read:list_registration_questions:admin</code>\n\n"
+            "Activate the app in Zoom Marketplace after choosing these scopes, then apply the new Client ID, Client Secret, and Account ID here!"
+        )
+        keyboard = [[InlineKeyboardButton("Back to Settings ⬅️", callback_data="back_to_config")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text(
+            recovery_text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+        return AWAIT_CONFIG_CHOICE
+    elif query.data == "back_to_config":
+        return await show_config_menu(update, context)
     elif query.data == "back_to_admin_panel":
         # Exit configuration flow and return to main admin control panel
         db_type = "Cloud PostgreSQL (Supabase)" if storage.IS_POSTGRES else "Local SQLite (database.db)"
@@ -1102,25 +1468,10 @@ async def config_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         elif "RENDER" in os.environ:
             bot_hosting = "Cloud (Render)"
 
-        keyboard = [
-            [
-                InlineKeyboardButton("📋 View Requests List", callback_data="admin_requests"),
-                InlineKeyboardButton("✏️ View Name Changes", callback_data="admin_name_changes")
-            ],
-            [
-                InlineKeyboardButton("⚙️ Configure Zoom", callback_data="admin_config"),
-                InlineKeyboardButton("📊 System Report", callback_data="admin_report")
-            ],
-            [
-                InlineKeyboardButton("👤 Manage Admins", callback_data="admin_manage")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = get_admin_panel_markup()
+        admin_text = get_admin_panel_back_text(bot_hosting, db_type)
         await query.message.reply_text(
-            f"🛡️ <b>Admin Control Panel</b>\n\n"
-            f"🌐 <b>Bot Hosting:</b> <code>{bot_hosting}</code>\n"
-            f"🗄️ <b>Database:</b> <code>{db_type}</code>\n\n"
-            "Welcome back. Please select a task from the menu below:",
+            admin_text,
             reply_markup=reply_markup,
             parse_mode="HTML"
         )
@@ -1151,6 +1502,45 @@ async def registration_link_received(update: Update, context: ContextTypes.DEFAU
         
     storage.set_setting("zoom_registration_link", new_link)
     await update.message.reply_text("✅ Zoom Registration Link updated successfully!")
+    return await show_config_menu(update, context)
+
+async def client_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Saves the new Zoom Client ID setting.
+    """
+    new_cid = update.message.text.strip()
+    if not new_cid:
+        await update.message.reply_text("⚠️ Client ID cannot be empty. Please type again:")
+        return AWAIT_CLIENT_ID_INPUT
+        
+    storage.set_setting("zoom_client_id", new_cid)
+    await update.message.reply_text("✅ Zoom Client ID updated successfully!")
+    return await show_config_menu(update, context)
+
+async def client_secret_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Saves the new Zoom Client Secret setting.
+    """
+    new_secret = update.message.text.strip()
+    if not new_secret:
+        await update.message.reply_text("⚠️ Client Secret cannot be empty. Please type again:")
+        return AWAIT_CLIENT_SECRET_INPUT
+        
+    storage.set_setting("zoom_client_secret", new_secret)
+    await update.message.reply_text("✅ Zoom Client Secret updated successfully!")
+    return await show_config_menu(update, context)
+
+async def account_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Saves the new Zoom Account ID setting.
+    """
+    new_aid = update.message.text.strip()
+    if not new_aid:
+        await update.message.reply_text("⚠️ Account ID cannot be empty. Please type again:")
+        return AWAIT_ACCOUNT_ID_INPUT
+        
+    storage.set_setting("zoom_account_id", new_aid)
+    await update.message.reply_text("✅ Zoom Account ID updated successfully!")
     return await show_config_menu(update, context)
 
 async def cancel_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1262,25 +1652,10 @@ async def admin_manage_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif "RENDER" in os.environ:
             bot_hosting = "Cloud (Render)"
 
-        keyboard = [
-            [
-                InlineKeyboardButton("📋 View Requests List", callback_data="admin_requests"),
-                InlineKeyboardButton("✏️ View Name Changes", callback_data="admin_name_changes")
-            ],
-            [
-                InlineKeyboardButton("⚙️ Configure Zoom", callback_data="admin_config"),
-                InlineKeyboardButton("📊 System Report", callback_data="admin_report")
-            ],
-            [
-                InlineKeyboardButton("👤 Manage Admins", callback_data="admin_manage")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = get_admin_panel_markup()
+        admin_text = get_admin_panel_back_text(bot_hosting, db_type)
         await query.message.reply_text(
-            f"🛡️ <b>Admin Control Panel</b>\n\n"
-            f"🌐 <b>Bot Hosting:</b> <code>{bot_hosting}</code>\n"
-            f"🗄️ <b>Database:</b> <code>{db_type}</code>\n\n"
-            f"Welcome back. Please select a task from the menu below:",
+            admin_text,
             reply_markup=reply_markup,
             parse_mode="HTML"
         )
@@ -1354,26 +1729,11 @@ async def cancel_admin_manage(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif "RENDER" in os.environ:
         bot_hosting = "Cloud (Render)"
 
-    keyboard = [
-        [
-            InlineKeyboardButton("📋 View Requests List", callback_data="admin_requests"),
-            InlineKeyboardButton("✏️ View Name Changes", callback_data="admin_name_changes")
-        ],
-        [
-            InlineKeyboardButton("⚙️ Configure Zoom", callback_data="admin_config"),
-            InlineKeyboardButton("📊 System Report", callback_data="admin_report")
-        ],
-        [
-            InlineKeyboardButton("👤 Manage Admins", callback_data="admin_manage")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = get_admin_panel_markup()
+    admin_text = get_admin_panel_back_text(bot_hosting, db_type)
     await reply_helper(
         update, 
-        f"🛡️ <b>Admin Control Panel</b>\n\n"
-        f"🌐 <b>Bot Hosting:</b> <code>{bot_hosting}</code>\n"
-        f"🗄️ <b>Database:</b> <code>{db_type}</code>\n\n"
-        "Admin management closed. Select a task below:", 
+        admin_text, 
         reply_markup=reply_markup
     )
     return ConversationHandler.END
@@ -1411,25 +1771,10 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif "RENDER" in os.environ:
             bot_hosting = "Cloud (Render)"
 
-        keyboard = [
-            [
-                InlineKeyboardButton("📋 View Requests List", callback_data="admin_requests"),
-                InlineKeyboardButton("✏️ View Name Changes", callback_data="admin_name_changes")
-            ],
-            [
-                InlineKeyboardButton("⚙️ Configure Zoom", callback_data="admin_config"),
-                InlineKeyboardButton("📊 System Report", callback_data="admin_report")
-            ],
-            [
-                InlineKeyboardButton("👤 Manage Admins", callback_data="admin_manage")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = get_admin_panel_markup()
+        admin_text = get_admin_panel_back_text(bot_hosting, db_type)
         await query.message.reply_text(
-            f"🛡️ <b>Admin Control Panel</b>\n\n"
-            f"🌐 <b>Bot Hosting:</b> <code>{bot_hosting}</code>\n"
-            f"🗄️ <b>Database:</b> <code>{db_type}</code>\n\n"
-            "Welcome back. Please select a task from the menu below:",
+            admin_text,
             reply_markup=reply_markup,
             parse_mode="HTML"
         )
@@ -1471,25 +1816,84 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     reply_markup = InlineKeyboardMarkup(keyboard)
     await reply_helper(update, report, reply_markup=reply_markup)
 
+def resolve_email_from_param(param: str) -> str | None:
+    """
+    Resolves a registered Zoom email from a command parameter which might be:
+    - A direct Zoom email (e.g. alice@example.com)
+    - A numeric Telegram ID (e.g. 7905968402)
+    - A Telegram Username (e.g. @izax_x or izax_x)
+    - A Zoom Display Name (partial or exact)
+    Returns the resolved email if found, or None.
+    """
+    param = param.strip()
+    if not param:
+        return None
+        
+    # Case 1: Already an email format
+    if "@" in param and "." in param and not param.startswith("@"):
+        return param.lower()
+        
+    # Case 2: Numeric Telegram ID
+    if param.isdigit():
+        tg_id = int(param)
+        user_record = storage.get_user_by_telegram_id(tg_id)
+        if user_record:
+            return user_record["registered_email"]
+            
+    # Case 3: Telegram Username (with or without @)
+    username_clean = param.lstrip("@").lower()
+    with storage.get_db() as conn:
+        cursor = conn.execute(
+            """
+            SELECT registered_email FROM submissions_history 
+            WHERE LOWER(submitted_telegram_username) = ? 
+            LIMIT 1
+            """,
+            (username_clean,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["registered_email"]
+            
+    # Case 4: Zoom Display Name search
+    with storage.get_db() as conn:
+        cursor = conn.execute(
+            """
+            SELECT DISTINCT registered_email FROM submissions_history 
+            WHERE LOWER(submitted_zoom_name) = ? OR LOWER(submitted_zoom_name) LIKE ?
+            LIMIT 1
+            """,
+            (param.lower(), f"%{param.lower()}%")
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["registered_email"]
+            
+    return None
+
 async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Allows admin to manually blacklist an email.
-    Usage: /blacklist <email> [notes]
+    Usage: /blacklist <email/id/username/zoom_name> [notes]
     """
     if not storage.is_admin(update.effective_chat.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
     if not context.args:
-        await update.message.reply_text("Usage: <code>/blacklist &lt;email&gt; [optional_notes]</code>", parse_mode="HTML")
+        await update.message.reply_text("Usage: <code>/blacklist &lt;email/id/username/name&gt; [optional_notes]</code>", parse_mode="HTML")
         return
         
-    email = context.args[0].strip().lower()
+    target = context.args[0].strip()
     notes = " ".join(context.args[1:]).strip() if len(context.args) > 1 else "Manually blacklisted via command."
     
-    if not is_valid_email(email):
-        await update.message.reply_text("⚠️ Invalid email format.")
-        return
+    email = resolve_email_from_param(target)
+    if not email:
+        if "@" in target and "." in target:
+            email = target.lower()
+        else:
+            await update.message.reply_text(f"⚠️ Could not resolve user or email from query: <code>{html.escape(target)}</code>", parse_mode="HTML")
+            return
         
     try:
         zoom_service.update_registrant_status(email, "deny")
@@ -1511,19 +1915,24 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Allows admin to attach custom notes to a user profile.
-    Usage: /notes <email> <notes_text>
+    Usage: /notes <email/id/username/zoom_name> <notes_text>
     """
     if not storage.is_admin(update.effective_chat.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: <code>/notes &lt;email&gt; &lt;notes_text&gt;</code>", parse_mode="HTML")
+        await update.message.reply_text("Usage: <code>/notes &lt;email/id/username/name&gt; &lt;notes_text&gt;</code>", parse_mode="HTML")
         return
         
-    email = context.args[0].strip().lower()
+    target = context.args[0].strip()
     notes_text = " ".join(context.args[1:]).strip()
     
+    email = resolve_email_from_param(target)
+    if not email:
+        await update.message.reply_text(f"⚠️ Could not resolve user or email from query: <code>{html.escape(target)}</code>", parse_mode="HTML")
+        return
+        
     user_record = storage.get_user_by_email(email)
     if not user_record:
         await update.message.reply_text(f"⚠️ User profile for <code>{html.escape(email)}</code> does not exist in the database.", parse_mode="HTML")
@@ -1738,17 +2147,23 @@ async def review_name_change_card(update: Update, context: ContextTypes.DEFAULT_
 async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Pulls up the full interactive admin decision card for any email.
+    Usage: /review <email/id/username/zoom_name>
     """
     if not storage.is_admin(update.effective_chat.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
     if not context.args:
-        await update.message.reply_text("Usage: <code>/review &lt;email&gt;</code>", parse_mode="HTML")
+        await update.message.reply_text("Usage: <code>/review &lt;email/id/username/name&gt;</code>", parse_mode="HTML")
         return
         
-    email = context.args[0].strip().lower()
+    target = context.args[0].strip()
     
+    email = resolve_email_from_param(target)
+    if not email:
+        await update.message.reply_text(f"⚠️ Could not resolve user or email from query: <code>{html.escape(target)}</code>", parse_mode="HTML")
+        return
+        
     user_record = storage.get_user_by_email(email)
     if not user_record:
         await update.message.reply_text(f"⚠️ No profile found for <code>{html.escape(email)}</code>.", parse_mode="HTML")
@@ -1773,10 +2188,37 @@ async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         submission_count = len(history)
         history_summary = f"Applied {submission_count} times." if submission_count > 1 else "First-time applicant."
         
-    telegram_id = user_record["telegram_id"] or "None"
+    telegram_id = user_record["telegram_id"]
     global_status = user_record["global_status"]
     behavior_notes = user_record["behavior_notes"] or ""
     
+    # Check if this Telegram ID has other associated email profiles
+    other_profiles = []
+    if telegram_id:
+        with storage.get_db() as conn:
+            cursor = conn.execute(
+                "SELECT registered_email, global_status, behavior_notes FROM users WHERE telegram_id = ? AND LOWER(registered_email) != LOWER(?)",
+                (telegram_id, email)
+            )
+            other_profiles = [dict(row) for row in cursor.fetchall()]
+            
+    tg_warning = ""
+    tg_history_line = ""
+    if other_profiles:
+        profile_states = []
+        for p in other_profiles:
+            profile_states.append(f"{p['registered_email']} ({p['global_status']})")
+            if p['global_status'] == "Blacklisted":
+                tg_warning += f"🚨 <b>WARNING: Linked Telegram ID has a BLACKLISTED email: <code>{p['registered_email']}</code>!</b>\n\n"
+            elif p['global_status'] == "Denied":
+                tg_warning += f"⚠️ <b>WARNING: Linked Telegram ID was previously DENIED under email: <code>{p['registered_email']}</code>!</b>\n\n"
+            
+            # Carry over behavior notes if any
+            if p['behavior_notes'] and not behavior_notes:
+                behavior_notes = f"[From linked profile {p['registered_email']}] {p['behavior_notes']}"
+                
+        tg_history_line = f"- <b>Linked Telegram Profiles:</b> {', '.join(profile_states)}\n"
+        
     notes_preview = "None"
     if behavior_notes:
         notes_preview = behavior_notes.split("\n")[0][:40] + "..." if len(behavior_notes) > 40 else behavior_notes.split("\n")[0]
@@ -1798,10 +2240,12 @@ async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     admin_message = (
         f"🔔 <b>Zoom Registration Request Panel</b>\n\n"
         f"{blacklist_warning}"
+        f"{tg_warning}"
         f"👤 <b>User Details:</b>\n"
         f"- <b>Zoom Name:</b> <code>{html.escape(zoom_name)}</code>\n"
         f"- <b>Registered Email:</b> <code>{html.escape(email)}</code>\n"
-        f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id}</code>)\n\n"
+        f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id or 'None'}</code>)\n"
+        f"{tg_history_line}\n"
         f"📊 <b>History Summary:</b> {history_summary}\n"
         f"📝 <b>Notes Preview:</b> {html.escape(notes_preview)}\n\n"
         f"🟡 <b>Current Status:</b> {status_text}\n\n"
@@ -1814,17 +2258,22 @@ async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def deleteuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Deletes the user profile and their submission logs entirely from the database.
+    Usage: /deleteuser <email/id/username/zoom_name>
     """
     if not storage.is_admin(update.effective_chat.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
     if not context.args:
-        await update.message.reply_text("Usage: <code>/deleteuser &lt;email&gt;</code>", parse_mode="HTML")
+        await update.message.reply_text("Usage: <code>/deleteuser &lt;email/id/username/name&gt;</code>", parse_mode="HTML")
         return
         
-    email = context.args[0].strip().lower()
-    
+    target = context.args[0].strip()
+    email = resolve_email_from_param(target)
+    if not email:
+        await update.message.reply_text(f"⚠️ Could not resolve user or email from query: <code>{html.escape(target)}</code>", parse_mode="HTML")
+        return
+        
     with storage.get_db() as conn:
         conn.execute("DELETE FROM submissions_history WHERE LOWER(registered_email) = LOWER(?)", (email,))
         cursor = conn.execute("DELETE FROM users WHERE LOWER(registered_email) = LOWER(?)", (email,))
@@ -1837,18 +2286,23 @@ async def deleteuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def clearhistory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Deletes submission history records for an email, resetting application count to 0.
+    Deletes submission history records for a user, resetting application count to 0.
+    Usage: /clearhistory <email/id/username/zoom_name>
     """
     if not storage.is_admin(update.effective_chat.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
     if not context.args:
-        await update.message.reply_text("Usage: <code>/clearhistory &lt;email&gt;</code>", parse_mode="HTML")
+        await update.message.reply_text("Usage: <code>/clearhistory &lt;email/id/username/name&gt;</code>", parse_mode="HTML")
         return
         
-    email = context.args[0].strip().lower()
-    
+    target = context.args[0].strip()
+    email = resolve_email_from_param(target)
+    if not email:
+        await update.message.reply_text(f"⚠️ Could not resolve user or email from query: <code>{html.escape(target)}</code>", parse_mode="HTML")
+        return
+        
     with storage.get_db() as conn:
         cursor = conn.execute("DELETE FROM submissions_history WHERE LOWER(registered_email) = LOWER(?)", (email,))
         deleted_history = cursor.rowcount
@@ -1861,17 +2315,22 @@ async def clearhistory_command(update: Update, context: ContextTypes.DEFAULT_TYP
 async def clearnotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Clears the behavior notes of a user profile.
+    Usage: /clearnotes <email/id/username/zoom_name>
     """
     if not storage.is_admin(update.effective_chat.id):
         await update.message.reply_text("Unauthorized access.")
         return
         
     if not context.args:
-        await update.message.reply_text("Usage: <code>/clearnotes &lt;email&gt;</code>", parse_mode="HTML")
+        await update.message.reply_text("Usage: <code>/clearnotes &lt;email/id/username/name&gt;</code>", parse_mode="HTML")
         return
         
-    email = context.args[0].strip().lower()
-    
+    target = context.args[0].strip()
+    email = resolve_email_from_param(target)
+    if not email:
+        await update.message.reply_text(f"⚠️ Could not resolve user or email from query: <code>{html.escape(target)}</code>", parse_mode="HTML")
+        return
+        
     with storage.get_db() as conn:
         cursor = conn.execute("UPDATE users SET behavior_notes = '' WHERE LOWER(registered_email) = LOWER(?)", (email,))
         updated_count = cursor.rowcount
@@ -2039,16 +2498,28 @@ def main() -> None:
 
     # 3.5 Add Conversational Handler for Admin Variable Configurations
     config_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("config", config_start)],
+        entry_points=[
+            CommandHandler("config", config_start),
+            CallbackQueryHandler(config_start, pattern="^admin_config$")
+        ],
         states={
             AWAIT_CONFIG_CHOICE: [
-                CallbackQueryHandler(config_choice, pattern="^(set_mid|set_link|back_to_admin_panel)$")
+                CallbackQueryHandler(config_choice, pattern="^(set_mid|set_link|set_cid|set_secret|set_aid|back_to_admin_panel|zoom_recovery_manual|back_to_config)$")
             ],
             AWAIT_MID_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, meeting_id_received)
             ],
             AWAIT_LINK_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, registration_link_received)
+            ],
+            AWAIT_CLIENT_ID_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, client_id_received)
+            ],
+            AWAIT_CLIENT_SECRET_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, client_secret_received)
+            ],
+            AWAIT_ACCOUNT_ID_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, account_id_received)
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel_config)],
@@ -2081,6 +2552,24 @@ def main() -> None:
     )
     application.add_handler(admin_manage_conv_handler)
 
+    # 3.7 Add Conversational Handler for User Search
+    search_conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(start_search_flow, pattern="^admin_search$")
+        ],
+        states={
+            AWAIT_SEARCH_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, search_input_received)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_search),
+            CallbackQueryHandler(cancel_search, pattern="^back_to_admin_panel$")
+        ],
+        allow_reentry=True
+    )
+    application.add_handler(search_conv_handler)
+
     # 4. Add Admin Dashboard Callbacks
     application.add_handler(
         CallbackQueryHandler(admin_decision_callback, pattern="^(approve|deny|later|blacklist|editnotes|reviewreq|reviewname|apprname|denyname|viewhist)_\\d+$")
@@ -2088,7 +2577,7 @@ def main() -> None:
     
     # 4.5 Add Main Menu Navigation Callbacks
     application.add_handler(
-        CallbackQueryHandler(admin_menu_callback, pattern="^(admin_requests|admin_name_changes|admin_config|admin_report|back_to_admin_panel|reqpage_\\d+)$")
+        CallbackQueryHandler(admin_menu_callback, pattern="^(admin_requests|admin_name_changes|admin_config|admin_report|back_to_admin_panel|reqpage_\\d+|admin_search)$")
     )
     application.add_handler(
         CallbackQueryHandler(user_menu_callback, pattern="^(user_link|user_help|back_to_user_menu)$")

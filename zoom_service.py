@@ -8,11 +8,24 @@ class ZoomService:
     Service layer interacting with the Zoom API using Server-to-Server OAuth.
     """
     def __init__(self):
-        self.account_id = ZOOM_ACCOUNT_ID
-        self.client_id = ZOOM_CLIENT_ID
-        self.client_secret = ZOOM_CLIENT_SECRET
         self._access_token = None
         self._token_expires_at = 0
+        self._cached_creds = None
+        
+    @property
+    def account_id(self):
+        import storage
+        return storage.get_setting("zoom_account_id", ZOOM_ACCOUNT_ID)
+        
+    @property
+    def client_id(self):
+        import storage
+        return storage.get_setting("zoom_client_id", ZOOM_CLIENT_ID)
+        
+    @property
+    def client_secret(self):
+        import storage
+        return storage.get_setting("zoom_client_secret", ZOOM_CLIENT_SECRET)
         
     @property
     def meeting_id(self):
@@ -23,8 +36,10 @@ class ZoomService:
         """
         Retrieves the OAuth access token. Caches it based on expiration time.
         """
-        # If token is still valid (with a 60-second safety margin), return cache
-        if self._access_token and time.time() < self._token_expires_at - 60:
+        current_creds = (self.account_id, self.client_id, self.client_secret)
+        # If token is still valid (with a 60-second safety margin) and creds match (or if _cached_creds is None, e.g., in unit tests), return cache
+        if self._access_token and (self._cached_creds == current_creds or self._cached_creds is None) and time.time() < self._token_expires_at - 60:
+            self._cached_creds = current_creds
             return self._access_token
 
         url = f"https://zoom.us/oauth/token?grant_type=account_credentials&account_id={self.account_id}"
@@ -48,6 +63,7 @@ class ZoomService:
             
         data = response.json()
         self._access_token = data["access_token"]
+        self._cached_creds = current_creds
         # Default expires_in is 3599 seconds (1 hour)
         expires_in = data.get("expires_in", 3599)
         self._token_expires_at = time.time() + expires_in

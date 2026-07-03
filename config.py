@@ -39,6 +39,16 @@ try:
 except ValueError:
     raise ValueError(f"ADMIN_CHAT_ID must be a numeric integer. Got: '{ADMIN_CHAT_ID_RAW}'")
 
+# Validate and parse optional NOTIFICATION_CHAT_ID (falls back to ADMIN_CHAT_ID)
+NOTIFICATION_CHAT_ID_RAW = os.getenv("NOTIFICATION_CHAT_ID")
+if NOTIFICATION_CHAT_ID_RAW:
+    try:
+        NOTIFICATION_CHAT_ID = int(NOTIFICATION_CHAT_ID_RAW)
+    except ValueError:
+        raise ValueError(f"NOTIFICATION_CHAT_ID must be a numeric integer. Got: '{NOTIFICATION_CHAT_ID_RAW}'")
+else:
+    NOTIFICATION_CHAT_ID = ADMIN_CHAT_ID
+
 # Process Zoom Meeting ID to strip spaces
 ZOOM_MEETING_ID = str(ZOOM_MEETING_ID_RAW).strip().replace(" ", "")
 
