@@ -99,6 +99,7 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
             InlineKeyboardButton("👤 Manage Admins", callback_data="admin_manage")
         ],
         [
+            InlineKeyboardButton("🔄 Sync Zoom Registrants", callback_data="admin_synczoom"),
             InlineKeyboardButton("👤 Switch to User Menu", callback_data="switch_to_user_menu")
         ]
     ]
@@ -1779,6 +1780,8 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await show_config_menu(update, context)
     elif query.data == "admin_report":
         await report_command(update, context)
+    elif query.data == "admin_synczoom":
+        await synczoom_command(update, context)
     elif query.data == "back_to_admin_panel":
         db_type = "Cloud PostgreSQL (Supabase)" if storage.IS_POSTGRES else "Local SQLite (database.db)"
         bot_hosting = "Local Machine"
@@ -2646,7 +2649,7 @@ async def clearnotes_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Retrieves all registrants for the active meeting from Zoom and synchronizes them.
-    Uses the Zoom registration date (create_time) as the user's created_at timestamp.
+    Optimized to use a single connection and pre-fetch database records to prevent timeouts.
     """
     if not storage.is_admin(update.effective_user.id):
         await update.message.reply_text("Unauthorized access.")
@@ -2658,81 +2661,91 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     active_meeting_id = storage.get_setting("zoom_meeting_id", config.ZOOM_MEETING_ID)
     
     try:
+        # 1. Fetch all registrants from Zoom first
+        zoom_registrants_by_status = {}
         for zoom_status, db_status in [
             ("pending", "Pending"), 
             ("approved", "Approved"), 
             ("denied", "Denied")
         ]:
-            registrants = zoom_service.list_registrants(zoom_status)
-            for r in registrants:
-                email = r.get("email")
-                if not email:
-                    continue
-                email = email.strip().lower()
-                
-                first_name = r.get("first_name", "")
-                last_name = r.get("last_name", "")
-                zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
-                
-                # Extract the real Zoom registration date
-                zoom_create_time = r.get("create_time")  # e.g. "2026-05-23T13:11:00Z"
+            zoom_registrants_by_status[db_status] = zoom_service.list_registrants(zoom_status)
+            
+        # 2. Open a single database connection
+        with storage.get_db() as cursor:
+            # 3. Pre-fetch all users and histories to avoid SELECTs in the loop
+            cursor.execute("SELECT registered_email, global_status, created_at FROM users")
+            existing_users = {row["registered_email"].lower().strip(): row for row in cursor.fetchall()}
+            
+            cursor.execute("SELECT DISTINCT registered_email FROM submissions_history")
+            existing_history = {row["registered_email"].lower().strip() for row in cursor.fetchall()}
+            
+            # 4. Process all registrants
+            for db_status, registrants in zoom_registrants_by_status.items():
+                for r in registrants:
+                    email = r.get("email")
+                    if not email:
+                        continue
+                    email = email.strip().lower()
                     
-                existing = storage.get_user_by_email(email)
-                if not existing:
-                    # Insert new user with real Zoom registration date as created_at
-                    with storage.get_db() as cursor:
+                    first_name = r.get("first_name", "")
+                    last_name = r.get("last_name", "")
+                    zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
+                    zoom_create_time = r.get("create_time")
+                    
+                    user_record = existing_users.get(email)
+                    
+                    # Determine if we need to insert or update the user
+                    if not user_record:
+                        # Insert user
                         if zoom_create_time:
-                            storage.execute_query(
-                                cursor,
+                            cursor.execute(
                                 "INSERT INTO users (registered_email, telegram_id, global_status, created_at) VALUES (?, ?, ?, ?)",
-                                (email.lower(), None, db_status, zoom_create_time)
+                                (email, None, db_status, zoom_create_time)
                             )
                         else:
-                            storage.execute_query(
-                                cursor,
+                            cursor.execute(
                                 "INSERT INTO users (registered_email, telegram_id, global_status) VALUES (?, ?, ?)",
-                                (email.lower(), None, db_status)
+                                (email, None, db_status)
                             )
-                    sync_count += 1
-                else:
-                    changed = False
-                    if existing["global_status"] != db_status:
-                        storage.update_user_status(email, db_status)
-                        changed = True
-                    
-                    # Backfill: if existing created_at is newer than the real Zoom date,
-                    # it means created_at was set by a previous sync run — fix it
-                    if zoom_create_time:
-                        with storage.get_db() as cursor:
-                            storage.execute_query(
-                                cursor,
+                        sync_count += 1
+                        # Add to local dictionary to avoid duplicate insertions in the same run
+                        existing_users[email] = {"registered_email": email, "global_status": db_status, "created_at": zoom_create_time}
+                    else:
+                        # Check if status needs update
+                        status_changed = False
+                        if user_record["global_status"] != db_status:
+                            cursor.execute(
+                                "UPDATE users SET global_status = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (db_status, email)
+                            )
+                            status_changed = True
+                            sync_count += 1
+                        
+                        # Backfill timestamp if needed
+                        if zoom_create_time:
+                            cursor.execute(
                                 "UPDATE users SET created_at = ? WHERE LOWER(registered_email) = LOWER(?) AND created_at > ?",
                                 (zoom_create_time, email, zoom_create_time)
                             )
-                    if changed:
-                        sync_count += 1
-                        
-                # Log to submissions_history with real Zoom registration date
-                history = storage.get_submissions_by_email(email)
-                if not history:
-                    with storage.get_db() as cursor:
+                            
+                    # Process submissions history
+                    if email not in existing_history:
                         if zoom_create_time:
-                            storage.execute_query(
-                                cursor,
+                            cursor.execute(
                                 """INSERT INTO submissions_history 
                                    (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken, action_timestamp) 
                                    VALUES (?, ?, ?, ?, ?, ?)""",
                                 (email, zoom_name, "Unknown", active_meeting_id, db_status, zoom_create_time)
                             )
                         else:
-                            storage.execute_query(
-                                cursor,
+                            cursor.execute(
                                 """INSERT INTO submissions_history 
                                    (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken) 
                                    VALUES (?, ?, ?, ?, ?)""",
                                 (email, zoom_name, "Unknown", active_meeting_id, db_status)
                             )
-                    
+                        existing_history.add(email)
+                        
         await reply_helper(update, f"✅ Sync completed! Synchronized <b>{sync_count}</b> registrant profiles from Zoom.\n\n<i>Registration dates have been updated to match Zoom records.</i>")
     except Exception as e:
         logger.error("Sync error: %s", e)
@@ -2916,7 +2929,7 @@ def main() -> None:
     
     # 4.5 Add Main Menu Navigation Callbacks
     application.add_handler(
-        CallbackQueryHandler(admin_menu_callback, pattern="^(admin_requests|admin_name_changes|admin_config|admin_report|back_to_admin_panel|reqpage_\\d+.*|admin_search)$")
+        CallbackQueryHandler(admin_menu_callback, pattern="^(admin_requests|admin_name_changes|admin_config|admin_report|back_to_admin_panel|reqpage_\\d+.*|admin_search|admin_synczoom)$")
     )
     application.add_handler(
         CallbackQueryHandler(user_menu_callback, pattern="^(user_link|user_help|back_to_user_menu|switch_to_user_menu)$")
