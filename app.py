@@ -97,6 +97,9 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("📊 System Report", callback_data="admin_report"),
             InlineKeyboardButton("👤 Manage Admins", callback_data="admin_manage")
+        ],
+        [
+            InlineKeyboardButton("👤 Switch to User Menu", callback_data="switch_to_user_menu")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -122,6 +125,11 @@ def get_user_menu_markup(user_id: int) -> InlineKeyboardMarkup:
         keyboard.append([InlineKeyboardButton("✏️ Request Name Change", callback_data="user_name_change")])
         
     keyboard.append([InlineKeyboardButton("ℹ️ How It Works", callback_data="user_help")])
+    
+    # If the user is an admin, allow switching back to the admin panel
+    if storage.is_admin(user_id):
+        keyboard.append([InlineKeyboardButton("🛡️ Back to Admin Panel", callback_data="back_to_admin_panel")])
+        
     return InlineKeyboardMarkup(keyboard)
 
 # Helper to generate the administrative inline keyboard (standard registration)
@@ -319,7 +327,7 @@ async def user_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=reply_markup,
             parse_mode="HTML"
         )
-    elif query.data == "back_to_user_menu":
+    elif query.data in ("back_to_user_menu", "switch_to_user_menu"):
         user_id = query.from_user.id
         user_record = storage.get_user_by_telegram_id(user_id)
         status_message = ""
@@ -345,12 +353,16 @@ async def user_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
         reply_markup = get_user_menu_markup(user_id)
         
-        await query.message.reply_text(
+        message_text = (
+            f"Welcome <b>{html.escape(query.from_user.first_name)}</b> to the Telegram & Zoom Automated Approval System! 🚀\n\n"
             f"{status_message}"
-            "Please select an option from the menu below to get started:",
-            reply_markup=reply_markup,
-            parse_mode="HTML"
+            "Please select an option from the menu below to get started:"
         )
+        
+        try:
+            await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode="HTML")
+        except Exception:
+            await query.message.reply_text(message_text, reply_markup=reply_markup, parse_mode="HTML")
 
 # ==========================================
 # USER CONVERSATION FLOW (NEW REGISTRATIONS)
@@ -1780,11 +1792,18 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         reply_markup = get_admin_panel_markup()
         admin_text = get_admin_panel_back_text(bot_hosting, db_type)
-        await query.message.reply_text(
-            admin_text,
-            reply_markup=reply_markup,
-            parse_mode="HTML"
-        )
+        try:
+            await query.edit_message_text(
+                admin_text,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+        except Exception:
+            await query.message.reply_text(
+                admin_text,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
 
 # ==========================================
 # ADMINISTRATIVE COMMANDS
@@ -2900,7 +2919,7 @@ def main() -> None:
         CallbackQueryHandler(admin_menu_callback, pattern="^(admin_requests|admin_name_changes|admin_config|admin_report|back_to_admin_panel|reqpage_\\d+.*|admin_search)$")
     )
     application.add_handler(
-        CallbackQueryHandler(user_menu_callback, pattern="^(user_link|user_help|back_to_user_menu)$")
+        CallbackQueryHandler(user_menu_callback, pattern="^(user_link|user_help|back_to_user_menu|switch_to_user_menu)$")
     )
 
     # 5. Add Administrative Commands
