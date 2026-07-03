@@ -46,6 +46,7 @@ class RegisterRequest(BaseModel):
     last_name: str
     email: EmailStr
     custom_questions: Optional[List[CustomQuestionAnswer]] = None
+    standard_fields: Optional[dict] = None
 
 def verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
     """
@@ -165,7 +166,8 @@ async def register_user(req: RegisterRequest):
             email=email,
             first_name=req.first_name,
             last_name=req.last_name,
-            custom_questions=zoom_questions
+            custom_questions=zoom_questions,
+            standard_fields=req.standard_fields
         )
         join_url = zoom_res["join_url"]
     except Exception as e:

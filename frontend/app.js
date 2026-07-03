@@ -19,12 +19,30 @@ const errorEl = document.getElementById('error-container');
 const errorMsgEl = document.getElementById('error-message');
 const retryBtn = document.getElementById('retry-btn');
 const formEl = document.getElementById('registration-form');
+const standardQuestionsContainer = document.getElementById('standard-questions-container');
 const customQuestionsContainer = document.getElementById('custom-questions-container');
 const submitBtn = document.getElementById('submit-btn');
 const submitBtnText = submitBtn.querySelector('.btn-text');
 const submitBtnSpinner = submitBtn.querySelector('.btn-spinner');
 const successOverlay = document.getElementById('success-overlay');
 const closeBtn = document.getElementById('close-btn');
+
+const standardLabels = {
+    'last_name': 'Last Name',
+    'address': 'Address',
+    'city': 'City',
+    'state': 'State/Province',
+    'zip': 'Zip/Postal Code',
+    'country': 'Country',
+    'phone': 'Phone Number',
+    'industry': 'Industry',
+    'org': 'Organization/Company',
+    'job_title': 'Job Title',
+    'purchasing_time_frame': 'Purchasing Time Frame',
+    'role_in_purchase_decision': 'Role in Purchase Decision',
+    'no_of_employees': 'Number of Employees',
+    'comments': 'Comments/Questions'
+};
 
 let zoomQuestionsData = null;
 
@@ -37,6 +55,7 @@ async function loadQuestions() {
             throw new Error(`Server returned HTTP ${response.status}`);
         }
         zoomQuestionsData = await response.json();
+        renderStandardQuestions();
         renderCustomQuestions();
         showForm();
     } catch (error) {
@@ -118,6 +137,84 @@ function renderCustomQuestions() {
     });
 }
 
+// Dynamically render standard questions required by Zoom (e.g. Country)
+function renderStandardQuestions() {
+    standardQuestionsContainer.innerHTML = '';
+    
+    if (!zoomQuestionsData || !zoomQuestionsData.questions) {
+        return;
+    }
+    
+    zoomQuestionsData.questions.forEach((q) => {
+        const fieldName = q.field_name;
+        // Skip fields that are already hardcoded in index.html
+        if (fieldName === 'first_name' || fieldName === 'last_name' || fieldName === 'email') {
+            return;
+        }
+        
+        const formGroup = document.createElement('div');
+        formGroup.className = 'form-group';
+        
+        const label = document.createElement('label');
+        const labelText = standardLabels[fieldName] || fieldName;
+        label.innerHTML = `${escapeHtml(labelText)} ${q.required ? '<span class="required">*</span>' : ''}`;
+        formGroup.appendChild(label);
+        
+        let inputField;
+        
+        // Render country selector as a dropdown for better UX
+        if (fieldName === 'country') {
+            inputField = document.createElement('select');
+            inputField.name = `std_field_${fieldName}`;
+            inputField.dataset.standardField = fieldName;
+            if (q.required) inputField.required = true;
+            
+            const placeholderOpt = document.createElement('option');
+            placeholderOpt.value = '';
+            placeholderOpt.textContent = '-- Select Country --';
+            placeholderOpt.disabled = true;
+            placeholderOpt.selected = true;
+            inputField.appendChild(placeholderOpt);
+            
+            const countries = [
+                { code: 'TH', name: 'Thailand' },
+                { code: 'MY', name: 'Malaysia' },
+                { code: 'SG', name: 'Singapore' },
+                { code: 'ID', name: 'Indonesia' },
+                { code: 'VN', name: 'Vietnam' },
+                { code: 'PH', name: 'Philippines' },
+                { code: 'TW', name: 'Taiwan' },
+                { code: 'HK', name: 'Hong Kong' },
+                { code: 'CN', name: 'China' },
+                { code: 'JP', name: 'Japan' },
+                { code: 'KR', name: 'South Korea' },
+                { code: 'AU', name: 'Australia' },
+                { code: 'US', name: 'United States' },
+                { code: 'GB', name: 'United Kingdom' },
+                { code: 'CA', name: 'Canada' },
+                { code: 'IN', name: 'India' }
+            ];
+            
+            countries.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.code;
+                opt.textContent = c.name;
+                inputField.appendChild(opt);
+            });
+        } else {
+            inputField = document.createElement('input');
+            inputField.type = 'text';
+            inputField.name = `std_field_${fieldName}`;
+            inputField.dataset.standardField = fieldName;
+            inputField.placeholder = `Enter your ${labelText.toLowerCase()}...`;
+            if (q.required) inputField.required = true;
+        }
+        
+        formGroup.appendChild(inputField);
+        standardQuestionsContainer.appendChild(formGroup);
+    });
+}
+
 // Form submission handler
 formEl.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -129,6 +226,15 @@ formEl.addEventListener('submit', async (e) => {
     const firstName = formData.get('first_name').trim();
     const lastName = formData.get('last_name').trim();
     const email = formData.get('email').trim().toLowerCase();
+    
+    // Gather Standard Fields responses
+    const standardFieldsPayload = {};
+    const standardInputs = standardQuestionsContainer.querySelectorAll('input, select');
+    standardInputs.forEach(input => {
+        if (input.value.trim()) {
+            standardFieldsPayload[input.dataset.standardField] = input.value.trim();
+        }
+    });
     
     // Gather Custom Questions responses
     const customQuestionsPayload = [];
@@ -154,7 +260,8 @@ formEl.addEventListener('submit', async (e) => {
         first_name: firstName,
         last_name: lastName,
         email: email,
-        custom_questions: customQuestionsPayload
+        custom_questions: customQuestionsPayload,
+        standard_fields: standardFieldsPayload
     };
     
     try {

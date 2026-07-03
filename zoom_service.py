@@ -254,7 +254,7 @@ class ZoomService:
             
         return response.json()
 
-    def register_registrant(self, email: str, first_name: str, last_name: str, custom_questions: list = None) -> dict:
+    def register_registrant(self, email: str, first_name: str, last_name: str, custom_questions: list = None, standard_fields: dict = None) -> dict:
         """
         Submits a new registrant to Zoom.
         Returns a dict containing 'join_url' and 'registrant_id'.
@@ -271,6 +271,10 @@ class ZoomService:
             "first_name": first_name.strip(),
             "last_name": last_name.strip()
         }
+        if standard_fields:
+            for k, v in standard_fields.items():
+                if v is not None:
+                    payload[k] = str(v).strip()
         if custom_questions:
             payload["custom_questions"] = custom_questions
             
