@@ -228,9 +228,9 @@ async def register_user(req: RegisterRequest):
         
         reply_markup = get_admin_keyboard(sub_id)
         
-        # Send decision card to Admin Chat ID
+        # Send decision card to Notification Chat ID
         await bot.send_message(
-            chat_id=config.ADMIN_CHAT_ID,
+            chat_id=config.NOTIFICATION_CHAT_ID,
             text=admin_message,
             reply_markup=reply_markup,
             parse_mode="HTML"
