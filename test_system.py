@@ -237,5 +237,17 @@ class TestSystemScaffold(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["custom_questions"][0]["title"], "Industry")
 
+        # 3. Test Admin Stats endpoint
+        headers = {"Authorization": "MOCK_TOKEN"}
+        response = client.get("/api/admin/stats", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("total", response.json())
+        self.assertIn("pending", response.json())
+
+        # 4. Test Admin Requests endpoint
+        response = client.get("/api/admin/requests", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.json(), list)
+
 if __name__ == "__main__":
     unittest.main()

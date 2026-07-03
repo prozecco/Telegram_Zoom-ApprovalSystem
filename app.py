@@ -85,6 +85,9 @@ async def reply_helper(update: Update, text: str, reply_markup=None) -> None:
 
 # Helper to generate the main Admin Control Panel inline keyboard markup
 def get_admin_panel_markup() -> InlineKeyboardMarkup:
+    mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
+    is_https_webapp = mini_app_url.lower().startswith("https://")
+    
     keyboard = [
         [
             InlineKeyboardButton("📋 View Requests List", callback_data="admin_requests"),
@@ -103,6 +106,10 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
             InlineKeyboardButton("👤 Switch to User Menu", callback_data="switch_to_user_menu")
         ]
     ]
+    if is_https_webapp:
+        admin_dashboard_url = mini_app_url.rstrip('/') + '/admin.html'
+        keyboard.insert(0, [InlineKeyboardButton("📊 Open Admin Dashboard", web_app=WebAppInfo(url=admin_dashboard_url))])
+        
     return InlineKeyboardMarkup(keyboard)
 
 # Helper to generate the main User Menu inline keyboard markup
