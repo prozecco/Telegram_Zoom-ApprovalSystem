@@ -14,7 +14,14 @@ document.documentElement.style.setProperty('--tg-theme-button-color', tg.themePa
 document.documentElement.style.setProperty('--tg-theme-button-text-color', tg.themeParams.button_text_color || '#ffffff');
 
 // Dom Elements
-const loadingEl = document.getElementById('loading-questions');
+const routerLoadingEl = document.getElementById('router-loading');
+const routerBlockedEl = document.getElementById('router-blocked');
+const routerWelcomeEl = document.getElementById('router-welcome');
+const routerPendingEl = document.getElementById('router-pending');
+const welcomeNameEl = document.getElementById('welcome-name');
+const pendingNameEl = document.getElementById('pending-name');
+const joinBtnLink = document.getElementById('join-btn-link');
+
 const errorEl = document.getElementById('error-container');
 const errorMsgEl = document.getElementById('error-message');
 const retryBtn = document.getElementById('retry-btn');
@@ -46,6 +53,16 @@ const standardLabels = {
 
 let zoomQuestionsData = null;
 
+function getHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    if (tg?.initData) {
+        headers['Authorization'] = tg.initData;
+    } else {
+        headers['Authorization'] = 'MOCK_TOKEN';
+    }
+    return headers;
+}
+
 // Fetch Zoom registration questions on load
 async function loadQuestions() {
     showLoading();
@@ -65,22 +82,28 @@ async function loadQuestions() {
 }
 
 function showLoading() {
-    loadingEl.classList.remove('hidden');
-    errorEl.classList.add('hidden');
-    formEl.classList.add('hidden');
+    hideAllGatewayStates();
+    routerLoadingEl.classList.remove('hidden');
 }
 
 function showForm() {
-    loadingEl.classList.add('hidden');
-    errorEl.classList.add('hidden');
+    hideAllGatewayStates();
     formEl.classList.remove('hidden');
 }
 
 function showError(msg) {
-    loadingEl.classList.add('hidden');
+    hideAllGatewayStates();
     errorEl.classList.remove('hidden');
-    formEl.classList.add('hidden');
     errorMsgEl.textContent = msg;
+}
+
+function hideAllGatewayStates() {
+    routerLoadingEl.classList.add('hidden');
+    routerBlockedEl.classList.add('hidden');
+    routerWelcomeEl.classList.add('hidden');
+    routerPendingEl.classList.add('hidden');
+    errorEl.classList.add('hidden');
+    formEl.classList.add('hidden');
 }
 
 // Dynamically render custom questions fetched from Zoom API
@@ -306,7 +329,65 @@ closeBtn.addEventListener('click', () => {
     tg.close();
 });
 
-retryBtn.addEventListener('click', loadQuestions);
+retryBtn.addEventListener('click', initGateway);
+
+async function initGateway() {
+    showGatewayLoading();
+    try {
+        const response = await fetch('/api/auth/verify', { headers: getHeaders() });
+        if (!response.ok) {
+            throw new Error(`Auth check returned HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        routeUser(data);
+    } catch (error) {
+        console.error('Gateway Error:', error);
+        showGatewayError('Failed to verify session. Please check your network and try again.');
+    }
+}
+
+function routeUser(data) {
+    hideAllGatewayStates();
+    
+    if (data.role === 'admin') {
+        window.location.href = 'admin.html';
+        return;
+    }
+    
+    if (data.role === 'blacklisted') {
+        routerBlockedEl.classList.remove('hidden');
+        return;
+    }
+    
+    if (data.role === 'active_user') {
+        welcomeNameEl.textContent = data.name || 'User';
+        joinBtnLink.href = data.join_url || '#';
+        routerWelcomeEl.classList.remove('hidden');
+        tg.HapticFeedback?.notificationOccurred('success');
+        return;
+    }
+    
+    if (data.role === 'pending') {
+        pendingNameEl.textContent = data.name || 'User';
+        routerPendingEl.classList.remove('hidden');
+        return;
+    }
+    
+    // Guest/new user -> fetch dynamic form questions
+    loadQuestions();
+}
+
+function showGatewayLoading() {
+    hideAllGatewayStates();
+    routerLoadingEl.classList.remove('hidden');
+}
+
+function showGatewayError(msg) {
+    hideAllGatewayStates();
+    errorEl.classList.remove('hidden');
+    errorMsgEl.textContent = msg;
+}
 
 // Helper to escape HTML tags
 function escapeHtml(str) {
@@ -318,5 +399,5 @@ function escapeHtml(str) {
         .replace(/'/g, "&#039;");
 }
 
-// Run initial loading
-loadQuestions();
+// Run initial gateway router load
+initGateway();

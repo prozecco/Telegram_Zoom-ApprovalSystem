@@ -32,10 +32,25 @@ const detailNameEl = document.getElementById('detail-name');
 const detailEmailEl = document.getElementById('detail-email');
 const detailCountryEl = document.getElementById('detail-country');
 const detailTelegramEl = document.getElementById('detail-telegram');
-const detailStatusEl = document.getElementById('detail-status');
+const detailStatusSelect = document.getElementById('detail-status-select');
 const detailNotesEl = document.getElementById('detail-notes');
 const saveNotesBtn = document.getElementById('save-notes-btn');
 const historyListEl = document.getElementById('history-list');
+
+const syncZoomBtn = document.getElementById('sync-zoom-btn');
+const syncBtnText = document.getElementById('sync-btn-text');
+const addMetaBtn = document.getElementById('add-meta-btn');
+const metadataListEl = document.getElementById('metadata-list');
+const addHistoryBtn = document.getElementById('add-history-btn');
+
+// Dialog Elements
+const dialogOverlay = document.getElementById('dialog-overlay');
+const dialog = document.getElementById('dialog');
+const dialogTitle = document.getElementById('dialog-title');
+const dialogCloseBtn = document.getElementById('dialog-close-btn');
+const dialogBody = document.getElementById('dialog-body');
+const dialogCancelBtn = document.getElementById('dialog-cancel-btn');
+const dialogSaveBtn = document.getElementById('dialog-save-btn');
 
 // Headers helper
 function getHeaders() {
@@ -288,13 +303,45 @@ async function openDrawer(user) {
     const tgIdStr = user.telegram_id ? ` (ID: ${user.telegram_id})` : '';
     detailTelegramEl.textContent = `${tgUsername}${tgIdStr}`;
     
-    detailStatusEl.innerHTML = getStatusBadge(user.global_status);
+    detailStatusSelect.value = user.global_status || 'Pending';
+    detailStatusSelect.onchange = async () => {
+        const newStatus = detailStatusSelect.value;
+        if (confirm(`Are you sure you want to change the status of ${user.registered_email} to ${newStatus}?`)) {
+            await runAction([user.registered_email], newStatus);
+            // Refresh local request status value in allRequests list
+            const req = allRequests.find(r => r.registered_email === user.registered_email);
+            if (req) req.global_status = newStatus;
+        } else {
+            // Reset to previous status
+            detailStatusSelect.value = user.global_status || 'Pending';
+        }
+    };
+    
+    // Parse and render Metadata list
+    let metadata = [];
+    try {
+        metadata = user.metadata ? JSON.parse(user.metadata) : [];
+    } catch (e) {
+        console.error("Error parsing user metadata:", e);
+    }
+    renderMetadataList(user.registered_email, metadata);
+    
+    // Setup add metadata button listener
+    addMetaBtn.onclick = () => openMetadataDialog(user.registered_email, metadata);
+    
     detailNotesEl.value = user.behavior_notes || '';
     
     drawerOverlay.classList.add('active');
     drawer.classList.add('active');
     
-    // Fetch History
+    // Setup add history entry listener
+    addHistoryBtn.onclick = () => openHistoryDialog(user.registered_email);
+    
+    // Fetch History List
+    await fetchHistoryList(user);
+}
+
+async function fetchHistoryList(user) {
     historyListEl.innerHTML = '<p style="font-size: 12px; color: var(--tg-theme-hint-color);">Loading submissions...</p>';
     try {
         const response = await fetch(`/api/admin/history?email=${encodeURIComponent(user.registered_email)}`, { headers: getHeaders() });
@@ -309,21 +356,289 @@ async function openDrawer(user) {
         history.forEach(item => {
             const hDiv = document.createElement('div');
             hDiv.className = 'history-item';
+            hDiv.style = 'position: relative; padding: 10px; border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; margin-bottom: 8px; box-sizing: border-box;';
             
             const dateStr = new Date(item.action_timestamp).toLocaleString();
             hDiv.innerHTML = `
-                <div class="history-header">
-                    <span style="font-weight: 600;">Meeting ID: ${item.meeting_id || 'Unknown'}</span>
+                <div class="history-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 600; font-size: 13px;">Meeting ID: ${item.meeting_id || 'Unknown'}</span>
                     <span class="badge ${item.action_taken === 'Approved' ? 'badge-approved' : item.action_taken === 'Denied' ? 'badge-denied' : 'badge-pending'}">${item.action_taken}</span>
                 </div>
-                <div style="color: var(--tg-theme-hint-color); font-size: 11px;">Zoom Name: ${item.submitted_zoom_name}</div>
-                <div style="color: var(--tg-theme-hint-color); font-size: 10px; margin-top: 2px;">${dateStr}</div>
+                <div style="color: var(--tg-theme-hint-color); font-size: 11px;">Zoom Name: ${item.submitted_zoom_name || 'Unknown'}</div>
+                <div style="color: var(--tg-theme-hint-color); font-size: 11px;">Telegram: @${item.submitted_telegram_username || 'Unknown'}</div>
+                <div style="color: var(--tg-theme-hint-color); font-size: 10px; margin-top: 4px;">${dateStr}</div>
+                
+                <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: flex-end;">
+                    <button class="action-icon-btn history-edit-btn" style="padding: 2px; font-size: 11px;" title="Edit Entry">✏️ Edit</button>
+                    <button class="action-icon-btn history-del-btn" style="padding: 2px; font-size: 11px;" title="Delete Entry">🗑️ Delete</button>
+                </div>
             `;
+            
+            hDiv.querySelector('.history-edit-btn').onclick = () => openHistoryDialog(user.registered_email, item);
+            hDiv.querySelector('.history-del-btn').onclick = () => deleteHistoryEntry(user.registered_email, item.id);
+            
             historyListEl.appendChild(hDiv);
         });
     } catch (err) {
         historyListEl.innerHTML = '<p style="font-size: 12px; color: #ef4444;">Failed to load history.</p>';
     }
+}
+
+function renderMetadataList(email, metadata) {
+    metadataListEl.innerHTML = '';
+    
+    let metadataArray = [];
+    if (Array.isArray(metadata)) {
+        metadataArray = metadata;
+    } else if (typeof metadata === 'object' && metadata !== null) {
+        metadataArray = Object.keys(metadata).map(key => ({ title: key, value: metadata[key] }));
+    }
+    
+    if (metadataArray.length === 0) {
+        metadataListEl.innerHTML = '<p style="font-size: 12px; color: var(--tg-theme-hint-color); margin: 0;">No metadata linked.</p>';
+        return;
+    }
+    
+    metadataArray.forEach((item, index) => {
+        const row = document.createElement('div');
+        row.style = 'display: flex; justify-content: space-between; align-items: flex-start; padding: 6px 8px; background: rgba(255,255,255,0.02); border-radius: 6px; font-size: 12px; border: 1px solid rgba(255,255,255,0.04); margin-bottom: 4px; box-sizing: border-box;';
+        
+        const content = document.createElement('div');
+        content.style = 'display: flex; flex-direction: column; gap: 2px; flex-grow: 1; margin-right: 8px; word-break: break-all;';
+        
+        const titleSpan = document.createElement('span');
+        titleSpan.style = 'font-weight: 500; color: var(--tg-theme-hint-color);';
+        titleSpan.textContent = item.title;
+        content.appendChild(titleSpan);
+        
+        const valSpan = document.createElement('span');
+        valSpan.style = 'color: var(--tg-theme-text-color);';
+        valSpan.textContent = item.value;
+        content.appendChild(valSpan);
+        
+        row.appendChild(content);
+        
+        const actions = document.createElement('div');
+        actions.style = 'display: flex; gap: 6px; align-self: center;';
+        
+        const editBtn = document.createElement('button');
+        editBtn.className = 'action-icon-btn';
+        editBtn.innerHTML = '✏️';
+        editBtn.style = 'padding: 2px; font-size: 11px; cursor: pointer;';
+        editBtn.onclick = () => openMetadataDialog(email, metadataArray, index);
+        actions.appendChild(editBtn);
+        
+        const delBtn = document.createElement('button');
+        delBtn.className = 'action-icon-btn';
+        delBtn.innerHTML = '🗑️';
+        delBtn.style = 'padding: 2px; font-size: 11px; cursor: pointer;';
+        delBtn.onclick = () => deleteMetadataItem(email, metadataArray, index);
+        actions.appendChild(delBtn);
+        
+        row.appendChild(actions);
+        metadataListEl.appendChild(row);
+    });
+}
+
+async function saveMetadata(email, metadataArray) {
+    try {
+        const response = await fetch('/api/admin/metadata', {
+            method: 'PUT',
+            headers: getHeaders(),
+            body: JSON.stringify({ email, metadata: metadataArray })
+        });
+        if (response.ok) {
+            const req = allRequests.find(r => r.registered_email === email);
+            if (req) {
+                req.metadata = JSON.stringify(metadataArray);
+            }
+            renderMetadataList(email, metadataArray);
+        } else {
+            alert("Failed to save metadata updates.");
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error saving metadata.");
+    }
+}
+
+function deleteMetadataItem(email, metadataArray, index) {
+    if (confirm(`Remove metadata field "${metadataArray[index].title}"?`)) {
+        const updated = [...metadataArray];
+        updated.splice(index, 1);
+        saveMetadata(email, updated);
+    }
+}
+
+function openMetadataDialog(email, metadataArray, editIndex = -1) {
+    const isEdit = editIndex !== -1;
+    dialogTitle.textContent = isEdit ? 'Edit Metadata' : 'Add Metadata';
+    
+    dialogBody.innerHTML = `
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box;">
+            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Key / Field Name</label>
+            <input type="text" id="dialog-meta-key" placeholder="e.g. Telegram Username" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;" value="${isEdit ? escapeHtml(metadataArray[editIndex].title) : ''}" ${isEdit ? 'disabled' : ''}>
+        </div>
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box;">
+            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Value</label>
+            <input type="text" id="dialog-meta-value" placeholder="e.g. @username" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;" value="${isEdit ? escapeHtml(metadataArray[editIndex].value) : ''}">
+        </div>
+    `;
+    
+    openDialog();
+    
+    dialogSaveBtn.onclick = () => {
+        const keyInput = document.getElementById('dialog-meta-key');
+        const valInput = document.getElementById('dialog-meta-value');
+        const key = keyInput.value.trim();
+        const val = valInput.value.trim();
+        
+        if (!key || !val) {
+            alert("Both Key and Value are required.");
+            return;
+        }
+        
+        const updated = [...metadataArray];
+        if (isEdit) {
+            updated[editIndex].value = val;
+        } else {
+            if (updated.some(item => item.title.toLowerCase() === key.toLowerCase())) {
+                alert(`Field "${key}" already exists. Edit the existing one instead.`);
+                return;
+            }
+            updated.push({ title: key, value: val });
+        }
+        
+        saveMetadata(email, updated);
+        closeDialog();
+    };
+}
+
+async function deleteHistoryEntry(email, id) {
+    if (confirm("Are you sure you want to delete this historical submission entry? This will not affect the user's Zoom status.")) {
+        try {
+            const response = await fetch(`/api/admin/history/${id}`, {
+                method: 'DELETE',
+                headers: getHeaders()
+            });
+            if (response.ok) {
+                const req = allRequests.find(r => r.registered_email === email);
+                if (req) await fetchHistoryList(req);
+            } else {
+                alert("Failed to delete history entry.");
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Error deleting history.");
+        }
+    }
+}
+
+function openHistoryDialog(email, item = null) {
+    const isEdit = item !== null;
+    dialogTitle.textContent = isEdit ? 'Edit Submission Entry' : 'Add Submission Entry';
+    
+    const timestampStr = isEdit ? item.action_timestamp : new Date().toISOString();
+    
+    dialogBody.innerHTML = `
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box;">
+            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Meeting ID</label>
+            <input type="text" id="dialog-hist-meeting" placeholder="e.g. 89456729013" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;" value="${isEdit ? escapeHtml(item.meeting_id) : ''}">
+        </div>
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box;">
+            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Zoom Name</label>
+            <input type="text" id="dialog-hist-name" placeholder="e.g. John Doe" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;" value="${isEdit ? escapeHtml(item.submitted_zoom_name) : ''}">
+        </div>
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box;">
+            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Telegram Username</label>
+            <input type="text" id="dialog-hist-tg" placeholder="e.g. username" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;" value="${isEdit ? escapeHtml(item.submitted_telegram_username) : 'Unknown'}">
+        </div>
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box;">
+            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Action Taken / Status</label>
+            <select id="dialog-hist-action" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;">
+                <option value="Approved" ${isEdit && item.action_taken === 'Approved' ? 'selected' : ''}>Approved</option>
+                <option value="Denied" ${isEdit && item.action_taken === 'Denied' ? 'selected' : ''}>Denied</option>
+                <option value="Pending" ${isEdit && item.action_taken === 'Pending' ? 'selected' : ''}>Pending</option>
+            </select>
+        </div>
+        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box;">
+            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Timestamp (ISO/UTC)</label>
+            <input type="text" id="dialog-hist-time" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;" value="${escapeHtml(timestampStr)}">
+        </div>
+    `;
+    
+    openDialog();
+    
+    dialogSaveBtn.onclick = async () => {
+        const meeting = document.getElementById('dialog-hist-meeting').value.trim();
+        const zoomName = document.getElementById('dialog-hist-name').value.trim();
+        const tgName = document.getElementById('dialog-hist-tg').value.trim();
+        const actionVal = document.getElementById('dialog-hist-action').value;
+        const timeVal = document.getElementById('dialog-hist-time').value.trim();
+        
+        if (!meeting || !zoomName || !tgName || !timeVal) {
+            alert("All fields are required.");
+            return;
+        }
+        
+        const payload = {
+            submitted_zoom_name: zoomName,
+            submitted_telegram_username: tgName,
+            meeting_id: meeting,
+            action_taken: actionVal,
+            action_timestamp: timeVal
+        };
+        
+        try {
+            let response;
+            if (isEdit) {
+                payload.id = item.id;
+                response = await fetch('/api/admin/history', {
+                    method: 'PUT',
+                    headers: getHeaders(),
+                    body: JSON.stringify(payload)
+                });
+            } else {
+                payload.email = email;
+                response = await fetch('/api/admin/history', {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify(payload)
+                });
+            }
+            
+            if (response.ok) {
+                const req = allRequests.find(r => r.registered_email === email);
+                if (req) await fetchHistoryList(req);
+                closeDialog();
+            } else {
+                alert("Failed to save history entry.");
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Error saving history entry.");
+        }
+    };
+}
+
+function openDialog() {
+    dialogOverlay.classList.add('active');
+    dialog.classList.add('active');
+}
+
+function closeDialog() {
+    dialogOverlay.classList.remove('active');
+    dialog.classList.remove('active');
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 
 function closeDrawer() {
@@ -382,10 +697,13 @@ document.querySelectorAll('.filter-pills .pill').forEach(pill => {
     };
 });
 
+let searchDebounceTimeout = null;
 searchInputEl.oninput = (e) => {
     searchQuery = e.target.value.trim();
-    // Fetch requests on input with debounce-like behavior if desired, or directly
-    fetchRequests();
+    clearTimeout(searchDebounceTimeout);
+    searchDebounceTimeout = setTimeout(() => {
+        fetchRequests();
+    }, 300);
 };
 
 selectAllCheckbox.onchange = (e) => {
@@ -396,6 +714,49 @@ selectAllCheckbox.onchange = (e) => {
 drawerCloseBtn.onclick = closeDrawer;
 drawerOverlay.onclick = closeDrawer;
 saveNotesBtn.onclick = saveNotes;
+
+// Dialog controls
+dialogCloseBtn.onclick = closeDialog;
+dialogCancelBtn.onclick = closeDialog;
+dialogOverlay.onclick = closeDialog;
+
+// Sync Zoom Control
+syncZoomBtn.onclick = async () => {
+    if (syncZoomBtn.disabled) return;
+    try {
+        setSyncLoading(true);
+        const response = await fetch('/api/admin/sync', {
+            method: 'POST',
+            headers: getHeaders()
+        });
+        const result = await response.json();
+        
+        if (response.ok) {
+            alert(result.message || "Zoom sync completed successfully!");
+            await fetchStats();
+            await fetchRequests();
+        } else {
+            alert(`Sync Failed: ${result.detail || "Unknown error"}`);
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error syncing from Zoom API.");
+    } finally {
+        setSyncLoading(false);
+    }
+};
+
+function setSyncLoading(isLoading) {
+    if (isLoading) {
+        syncZoomBtn.disabled = true;
+        syncBtnText.textContent = 'Syncing...';
+        syncZoomBtn.style.opacity = '0.6';
+    } else {
+        syncZoomBtn.disabled = false;
+        syncBtnText.textContent = 'Sync Zoom';
+        syncZoomBtn.style.opacity = '1';
+    }
+}
 
 // Bulk action triggers
 document.getElementById('bulk-btn-cancel').onclick = () => {

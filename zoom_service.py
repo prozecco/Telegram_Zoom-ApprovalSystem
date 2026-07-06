@@ -74,6 +74,14 @@ class ZoomService:
         Searches the meeting registrants list by email to retrieve their Zoom Registrant ID.
         Checks across 'pending', 'approved', and 'denied' statuses.
         """
+        import storage
+        # 1. Try to get it from database cache first
+        with storage.get_db() as cursor:
+            storage.execute_query(cursor, "SELECT zoom_registrant_id FROM users WHERE LOWER(registered_email) = LOWER(?)", (email,))
+            row = cursor.fetchone()
+            if row and row["zoom_registrant_id"]:
+                return row["zoom_registrant_id"]
+
         token = self._get_access_token()
         url = f"https://api.zoom.us/v2/meetings/{self.meeting_id}/registrants"
         headers = {
@@ -102,7 +110,16 @@ class ZoomService:
                 registrants = data.get("registrants", [])
                 for reg in registrants:
                     if reg.get("email", "").lower() == email.lower():
-                        return reg.get("id")
+                        reg_id = reg.get("id")
+                        if reg_id:
+                            # Lazy-cache it back to the database
+                            with storage.get_db() as cursor:
+                                storage.execute_query(
+                                    cursor, 
+                                    "UPDATE users SET zoom_registrant_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                    (reg_id, email)
+                                )
+                            return reg_id
                 
                 next_page_token = data.get("next_page_token")
                 if not next_page_token:

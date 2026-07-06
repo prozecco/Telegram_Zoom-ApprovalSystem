@@ -23,10 +23,35 @@
         </header>
 
         <main class="app-main">
-            <!-- Loading state -->
-            <div id="loading-questions" class="loading-state">
+            <!-- Gateway/Router state containers -->
+            <div id="router-loading" class="loading-state">
                 <div class="spinner"></div>
-                <p>Retrieving registration questions...</p>
+                <p>Verifying access...</p>
+            </div>
+
+            <div id="router-blocked" class="error-card hidden">
+                <div class="error-icon" style="color: #ef4444; font-size: 40px; margin-bottom: 12px;">🚫</div>
+                <h2>Access Restricted</h2>
+                <p style="margin-top: 8px; font-size: 14px; color: var(--tg-theme-hint-color, #9ca3af);">Your account has been blacklisted. Please contact the administrator.</p>
+                <button class="btn btn-secondary" style="margin-top: 20px; width: 100%;" onclick="window.Telegram?.WebApp?.close()">Close App</button>
+            </div>
+
+            <div id="router-welcome" class="success-card hidden" style="text-align: center; padding: 24px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255,255,255,0.05); box-sizing: border-box;">
+                <div class="success-icon" style="font-size: 40px; margin-bottom: 12px;">👋</div>
+                <h2 style="font-size: 18px; font-weight: 600; color: var(--tg-theme-text-color, #ffffff);">Welcome back, <span id="welcome-name"></span>!</h2>
+                <p style="margin-top: 8px; font-size: 14px; color: var(--tg-theme-hint-color, #9ca3af);">You are already registered and approved for this meeting.</p>
+                <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 20px;">
+                    <a id="join-btn-link" href="#" target="_blank" class="btn btn-primary" style="text-decoration: none; display: flex; align-items: center; justify-content: center; width: 100%; box-sizing: border-box;">Join Meeting 🎥</a>
+                    <button class="btn btn-secondary" style="width: 100%;" onclick="window.Telegram?.WebApp?.close()">Close App</button>
+                </div>
+            </div>
+
+            <div id="router-pending" class="success-card hidden" style="text-align: center; padding: 24px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255,255,255,0.05); box-sizing: border-box;">
+                <div class="success-icon" style="font-size: 40px; margin-bottom: 12px;">⏳</div>
+                <h2 style="font-size: 18px; font-weight: 600; color: var(--tg-theme-text-color, #ffffff);">Request is Pending</h2>
+                <p style="margin-top: 8px; font-size: 14px; color: var(--tg-theme-hint-color, #9ca3af);">Your registration request under the name <b id="pending-name"></b> is currently under review.</p>
+                <p style="margin-top: 8px; font-size: 13px; color: var(--tg-theme-hint-color, #9ca3af);">You will receive a notification in Telegram once approved.</p>
+                <button class="btn btn-secondary" style="margin-top: 20px; width: 100%;" onclick="window.Telegram?.WebApp?.close()">Close App</button>
             </div>
 
             <!-- Error state -->

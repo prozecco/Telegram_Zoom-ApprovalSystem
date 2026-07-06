@@ -248,6 +248,61 @@ class TestSystemScaffold(unittest.TestCase):
         response = client.get("/api/admin/requests", headers=headers)
         self.assertEqual(response.status_code, 200)
         self.assertIsInstance(response.json(), list)
+        
+        # 5. Test Auth Verify endpoint
+        response = client.get("/api/auth/verify", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["role"], "admin")
+        
+        # 6. Test Metadata CRUD
+        email = "alice_test@example.com"
+        storage.add_submission(email, 12345, "Alice Test", "alice_tg", config.ZOOM_MEETING_ID, "Pending")
+        
+        response = client.get(f"/api/admin/metadata?email={email}", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        
+        response = client.put("/api/admin/metadata", headers=headers, json={
+            "email": email,
+            "metadata": {"custom_field": "custom_val"}
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "success")
+        
+        # 7. Test History CRUD
+        response = client.post("/api/admin/history", headers=headers, json={
+            "email": email,
+            "submitted_zoom_name": "Alice History",
+            "submitted_telegram_username": "alice_tg",
+            "meeting_id": config.ZOOM_MEETING_ID,
+            "action_taken": "Approved"
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "success")
+        
+        # Fetch history to get the ID
+        hist = storage.get_submissions_by_email(email)
+        self.assertTrue(len(hist) > 0)
+        hist_id = hist[0]["id"]
+        
+        response = client.put("/api/admin/history", headers=headers, json={
+            "id": hist_id,
+            "submitted_zoom_name": "Alice History Edited",
+            "submitted_telegram_username": "alice_tg_edited",
+            "meeting_id": config.ZOOM_MEETING_ID,
+            "action_taken": "Denied",
+            "action_timestamp": "2026-07-07T00:00:00Z"
+        })
+        self.assertEqual(response.status_code, 200)
+        
+        response = client.delete(f"/api/admin/history/{hist_id}", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        
+        # 8. Test Zoom Sync API
+        with mock.patch("zoom_service.ZoomService.list_registrants") as mock_list_registrants:
+            mock_list_registrants.return_value = []
+            response = client.post("/api/admin/sync", headers=headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["status"], "success")
 
 if __name__ == "__main__":
     unittest.main()

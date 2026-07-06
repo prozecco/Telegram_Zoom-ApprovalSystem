@@ -50,11 +50,31 @@ class RegisterRequest(BaseModel):
 
 class AdminActionRequest(BaseModel):
     emails: List[str]
-    action: str  # "Approve", "Deny", "Blacklist"
+    action: str  # "Approve", "Deny", "Blacklist", "Pending", "On Hold"
 
 class AdminNotesRequest(BaseModel):
     email: str
     notes: str
+
+class AdminMetadataUpdateRequest(BaseModel):
+    email: str
+    metadata: dict
+
+class AdminAddHistoryRequest(BaseModel):
+    email: str
+    submitted_zoom_name: str
+    submitted_telegram_username: str
+    meeting_id: str
+    action_taken: str
+    action_timestamp: Optional[str] = None
+
+class AdminEditHistoryRequest(BaseModel):
+    id: int
+    submitted_zoom_name: str
+    submitted_telegram_username: str
+    meeting_id: str
+    action_taken: str
+    action_timestamp: str
 
 def verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
     """
@@ -155,6 +175,138 @@ async def get_questions():
             detail=f"Zoom API Error: {str(e)}"
         )
 
+@app.get("/api/auth/verify")
+async def verify_auth_role(authorization: str = Header(None)):
+    """
+    Verifies the user's role on startup based on their Telegram initData.
+    """
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No authorization header provided."
+        )
+        
+    if authorization == "MOCK_TOKEN" or not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "MOCK_TOKEN":
+        # Mock admin role for testing or configuration
+        return {
+            "role": "admin",
+            "telegram_id": config.ADMIN_CHAT_ID,
+            "name": "Mock Admin"
+        }
+        
+    data = verify_telegram_init_data(authorization, config.TELEGRAM_BOT_TOKEN)
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Telegram initialization data signature."
+        )
+        
+    try:
+        user_info = json.loads(data.get("user", "{}"))
+        telegram_id = user_info.get("id")
+        username = user_info.get("username", "Unknown")
+        first_name = user_info.get("first_name", "User")
+        last_name = user_info.get("last_name", "")
+        fullname = f"{first_name} {last_name}".strip()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to parse Telegram user info."
+        )
+        
+    if not telegram_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Telegram ID not found."
+        )
+
+    # Check if they are admin
+    if storage.is_admin(telegram_id):
+        return {
+            "role": "admin",
+            "telegram_id": telegram_id,
+            "name": fullname
+        }
+        
+    # Check if they are configured in main admin config ID
+    if telegram_id == config.ADMIN_CHAT_ID:
+        return {
+            "role": "admin",
+            "telegram_id": telegram_id,
+            "name": fullname
+        }
+
+    # Query DB for user status by telegram_id
+    with storage.get_db() as cursor:
+        storage.execute_query(
+            cursor, 
+            """
+            SELECT registered_email, global_status, join_url,
+                   (SELECT s.submitted_zoom_name FROM submissions_history s 
+                    WHERE s.registered_email = u.registered_email 
+                    ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name 
+            FROM users u WHERE telegram_id = ?
+            """, 
+            (telegram_id,)
+        )
+        row = cursor.fetchone()
+        
+    if not row and username and username != "Unknown":
+        # Check by Telegram username if username is set in history
+        with storage.get_db() as cursor:
+            storage.execute_query(
+                cursor,
+                "SELECT registered_email FROM submissions_history WHERE LOWER(submitted_telegram_username) = LOWER(?) ORDER BY action_timestamp DESC LIMIT 1",
+                (username,)
+            )
+            hist_row = cursor.fetchone()
+            if hist_row:
+                email = hist_row["registered_email"]
+                storage.execute_query(
+                    cursor,
+                    """
+                    SELECT registered_email, global_status, join_url,
+                           (SELECT s.submitted_zoom_name FROM submissions_history s 
+                            WHERE s.registered_email = u.registered_email 
+                            ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name 
+                    FROM users u WHERE LOWER(registered_email) = LOWER(?)
+                    """,
+                    (email,)
+                )
+                row = cursor.fetchone()
+
+    if not row:
+        return {
+            "role": "guest",
+            "telegram_id": telegram_id,
+            "name": fullname
+        }
+        
+    status = row["global_status"]
+    zoom_name = row["zoom_name"] or fullname
+    join_url = row["join_url"]
+    
+    if status == "Blacklisted":
+        return {
+            "role": "blacklisted",
+            "telegram_id": telegram_id
+        }
+    elif status == "Approved":
+        return {
+            "role": "active_user",
+            "telegram_id": telegram_id,
+            "name": zoom_name,
+            "join_url": join_url
+        }
+    else:
+        # Status is Pending or Denied or On Hold
+        return {
+            "role": "pending",
+            "telegram_id": telegram_id,
+            "name": zoom_name,
+            "status": status
+        }
+
 @app.post("/api/register")
 async def register_user(req: RegisterRequest):
     """
@@ -231,7 +383,8 @@ async def register_user(req: RegisterRequest):
             meeting_id=active_meeting_id,
             action_taken="Pending",
             join_url=join_url,
-            country=country_code
+            country=country_code,
+            custom_questions=zoom_questions
         )
     except Exception as e:
         logger.error(f"Database insertion failed: {e}")
@@ -328,7 +481,7 @@ async def get_admin_requests(
     """
     try:
         query_str = """
-            SELECT u.registered_email, u.telegram_id, u.global_status, u.created_at, u.country, u.behavior_notes,
+            SELECT u.registered_email, u.telegram_id, u.global_status, u.created_at, u.country, u.behavior_notes, u.metadata,
                    (SELECT s.submitted_zoom_name FROM submissions_history s
                     WHERE s.registered_email = u.registered_email
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name,
@@ -463,6 +616,8 @@ async def perform_admin_action(req: AdminActionRequest, admin_user = Depends(ver
                     zoom_service.update_registrant_status(email, "deny")
                 except Exception:
                     pass
+            elif req.action in ("Pending", "On Hold"):
+                db_status = "Pending"
                     
             storage.update_user_status(email, db_status)
             
@@ -550,6 +705,208 @@ async def perform_admin_action(req: AdminActionRequest, admin_user = Depends(ver
         "success_emails": success_emails,
         "failed_emails": [{"email": f[0], "reason": f[1]} for f in failed_emails]
     }
+
+@app.get("/api/admin/metadata")
+async def get_user_metadata(email: str, admin_user = Depends(verify_admin_access)):
+    try:
+        user_profile = storage.get_user_by_email(email)
+        if not user_profile:
+            raise HTTPException(status_code=404, detail="User not found")
+        meta_str = user_profile.get("metadata")
+        return json.loads(meta_str) if meta_str else {}
+    except Exception as e:
+        logger.error(f"Error fetching user metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/admin/metadata")
+async def update_user_metadata(req: AdminMetadataUpdateRequest, admin_user = Depends(verify_admin_access)):
+    try:
+        email = req.email.strip().lower()
+        metadata_str = json.dumps(req.metadata)
+        with storage.get_db() as cursor:
+            storage.execute_query(
+                cursor,
+                "UPDATE users SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                (metadata_str, email)
+            )
+        return {"status": "success", "message": "Metadata updated successfully"}
+    except Exception as e:
+        logger.error(f"Error updating user metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/history")
+async def add_history_log(req: AdminAddHistoryRequest, admin_user = Depends(verify_admin_access)):
+    try:
+        email = req.email.strip().lower()
+        zoom_name = req.submitted_zoom_name.strip()
+        tg_user = req.submitted_telegram_username.strip()
+        meet_id = req.meeting_id.strip()
+        action = req.action_taken.strip()
+        
+        with storage.get_db() as cursor:
+            if req.action_timestamp:
+                storage.execute_query(
+                    cursor,
+                    """
+                    INSERT INTO submissions_history (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken, action_timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (email, zoom_name, tg_user, meet_id, action, req.action_timestamp)
+                )
+            else:
+                storage.execute_query(
+                    cursor,
+                    """
+                    INSERT INTO submissions_history (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (email, zoom_name, tg_user, meet_id, action)
+                )
+        return {"status": "success", "message": "History entry added successfully"}
+    except Exception as e:
+        logger.error(f"Error adding history log: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/admin/history")
+async def edit_history_log(req: AdminEditHistoryRequest, admin_user = Depends(verify_admin_access)):
+    try:
+        with storage.get_db() as cursor:
+            storage.execute_query(
+                cursor,
+                """
+                UPDATE submissions_history
+                SET submitted_zoom_name = ?, submitted_telegram_username = ?, meeting_id = ?, action_taken = ?, action_timestamp = ?
+                WHERE id = ?
+                """,
+                (req.submitted_zoom_name.strip(), req.submitted_telegram_username.strip(), req.meeting_id.strip(), req.action_taken.strip(), req.action_timestamp, req.id)
+            )
+        return {"status": "success", "message": "History entry updated successfully"}
+    except Exception as e:
+        logger.error(f"Error updating history log: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/admin/history/{history_id}")
+async def delete_history_log(history_id: int, admin_user = Depends(verify_admin_access)):
+    try:
+        with storage.get_db() as cursor:
+            storage.execute_query(cursor, "DELETE FROM submissions_history WHERE id = ?", (history_id,))
+        return {"status": "success", "message": "History entry deleted successfully"}
+    except Exception as e:
+        logger.error(f"Error deleting history log: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/sync")
+async def trigger_zoom_sync(admin_user = Depends(verify_admin_access)):
+    try:
+        active_meeting_id = zoom_service.meeting_id
+        if not active_meeting_id:
+            raise HTTPException(status_code=400, detail="No active meeting ID set.")
+            
+        zoom_registrants_by_status = {}
+        for zoom_status in ["pending", "approved", "denied"]:
+            zoom_registrants_by_status[zoom_status] = zoom_service.list_registrants(status=zoom_status)
+            
+        with storage.get_db() as cursor:
+            storage.execute_query(cursor, "SELECT registered_email, global_status, created_at, country, zoom_registrant_id FROM users")
+            existing_users = {row["registered_email"].lower().strip(): dict(row) for row in cursor.fetchall()}
+            
+            storage.execute_query(cursor, "SELECT registered_email FROM submissions_history WHERE meeting_id = ?", (active_meeting_id,))
+            existing_history = {row["registered_email"].lower().strip() for row in cursor.fetchall()}
+            
+            sync_count = 0
+            for db_status, registrants in zoom_registrants_by_status.items():
+                for r in registrants:
+                    email = r.get("email")
+                    if not email:
+                        continue
+                    email = email.strip().lower()
+                    
+                    first_name = r.get("first_name", "")
+                    last_name = r.get("last_name", "")
+                    zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
+                    zoom_create_time = r.get("create_time")
+                    zoom_country = r.get("country")
+                    zoom_reg_id = r.get("id")
+                    zoom_custom_q = r.get("custom_questions")
+                    zoom_metadata_json = json.dumps(zoom_custom_q) if zoom_custom_q else None
+                    
+                    status_normalized = "Approved" if db_status == "approved" else "Denied" if db_status == "denied" else "Pending"
+                    
+                    user_record = existing_users.get(email)
+                    if not user_record:
+                        if zoom_create_time:
+                            storage.execute_query(
+                                cursor,
+                                "INSERT INTO users (registered_email, telegram_id, global_status, created_at, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                (email, None, status_normalized, zoom_create_time, zoom_country, zoom_reg_id, zoom_metadata_json)
+                            )
+                        else:
+                            storage.execute_query(
+                                cursor,
+                                "INSERT INTO users (registered_email, telegram_id, global_status, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                                (email, None, status_normalized, zoom_country, zoom_reg_id, zoom_metadata_json)
+                            )
+                        sync_count += 1
+                        existing_users[email] = {
+                            "registered_email": email,
+                            "global_status": status_normalized,
+                            "created_at": zoom_create_time,
+                            "country": zoom_country,
+                            "zoom_registrant_id": zoom_reg_id
+                        }
+                    else:
+                        if user_record["global_status"] != status_normalized:
+                            storage.execute_query(
+                                cursor,
+                                "UPDATE users SET global_status = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (status_normalized, email)
+                            )
+                            sync_count += 1
+                        
+                        if zoom_country and user_record.get("country") != zoom_country:
+                            storage.execute_query(
+                                cursor,
+                                "UPDATE users SET country = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (zoom_country, email)
+                            )
+                        
+                        if zoom_reg_id and user_record.get("zoom_registrant_id") != zoom_reg_id:
+                            storage.execute_query(
+                                cursor,
+                                "UPDATE users SET zoom_registrant_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (zoom_reg_id, email)
+                            )
+                            
+                        if zoom_metadata_json:
+                            storage.execute_query(
+                                cursor,
+                                "UPDATE users SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (zoom_metadata_json, email)
+                            )
+                            
+                    if email not in existing_history:
+                        if zoom_create_time:
+                            storage.execute_query(
+                                cursor,
+                                """INSERT INTO submissions_history 
+                                   (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken, action_timestamp) 
+                                   VALUES (?, ?, ?, ?, ?, ?)""",
+                                (email, zoom_name, "Unknown", active_meeting_id, status_normalized, zoom_create_time)
+                            )
+                        else:
+                            storage.execute_query(
+                                cursor,
+                                """INSERT INTO submissions_history 
+                                   (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken) 
+                                   VALUES (?, ?, ?, ?, ?)""",
+                                (email, zoom_name, "Unknown", active_meeting_id, status_normalized)
+                            )
+                        existing_history.add(email)
+                        
+        return {"status": "success", "message": f"Successfully synchronized {sync_count} profiles from Zoom."}
+    except Exception as e:
+        logger.error(f"Zoom sync failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Mount static files folder to serve the frontend web client
 frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")

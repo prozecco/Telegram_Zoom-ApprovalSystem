@@ -402,7 +402,7 @@
 </head>
 <body>
     <div class="app-container">
-        <header class="app-header" style="text-align: left; margin-bottom: 20px;">
+        <header class="app-header" style="text-align: left; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
             <div style="display: flex; align-items: center; gap: 12px;">
                 <div class="logo-container" style="margin: 0; width: 44px; height: 44px; font-size: 20px; line-height: 44px;">🛡️</div>
                 <div>
@@ -410,6 +410,9 @@
                     <p class="subtitle" style="margin: 2px 0 0 0; font-size: 12px;">Review and manage registrant approvals</p>
                 </div>
             </div>
+            <button id="sync-zoom-btn" class="btn btn-primary" style="padding: 8px 14px; font-size: 12px; border-radius: 8px; margin: 0; width: auto; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+                🔄 <span id="sync-btn-text">Sync Zoom</span>
+            </button>
         </header>
 
         <main class="app-main">
@@ -504,9 +507,27 @@
                 <div class="detail-label">Telegram</div>
                 <div id="detail-telegram" class="detail-value">-</div>
             </div>
+            
             <div class="detail-item">
                 <div class="detail-label">Current Status</div>
-                <div id="detail-status" class="detail-value">-</div>
+                <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
+                    <select id="detail-status-select" style="padding: 8px; border-radius: 6px; background: var(--tg-theme-secondary-bg-color, rgba(255,255,255,0.05)); color: var(--tg-theme-text-color, #ffffff); border: 1px solid rgba(255,255,255,0.1); font-size: 13px; flex-grow: 1; cursor: pointer; outline: none;">
+                        <option value="Pending">🟡 Pending</option>
+                        <option value="Approved">🟢 Approved</option>
+                        <option value="Denied">🔴 Denied</option>
+                        <option value="Blacklisted">🚫 Blacklisted</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="detail-item">
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 6px;">
+                    <div class="detail-label" style="margin: 0;">Linked Accounts & Metadata</div>
+                    <button id="add-meta-btn" class="btn btn-secondary" style="margin: 0; padding: 4px 8px; font-size: 11px; width: auto; font-weight: 500;">+ Add</button>
+                </div>
+                <div id="metadata-list" style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
+                    <!-- Dynamically populated key-value rows -->
+                </div>
             </div>
             
             <div class="detail-item">
@@ -516,11 +537,30 @@
             </div>
 
             <div class="history-section">
-                <div class="detail-label">Submission History</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 6px;">
+                    <div class="detail-label" style="margin: 0;">Submission History</div>
+                    <button id="add-history-btn" class="btn btn-secondary" style="margin: 0; padding: 4px 8px; font-size: 11px; width: auto; font-weight: 500;">+ Add Entry</button>
+                </div>
                 <div id="history-list" class="history-list">
                     <p style="font-size: 12px; color: var(--tg-theme-hint-color);">Loading submission history...</p>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Metadata & History Dialog Modal -->
+    <div id="dialog-overlay" class="drawer-overlay" style="z-index: 200;"></div>
+    <div id="dialog" class="drawer" style="z-index: 201; height: auto; max-height: 85%; border-radius: 16px 16px 0 0; bottom: 0; top: auto; box-shadow: 0 -8px 24px rgba(0,0,0,0.3);">
+        <div class="drawer-header" style="padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+            <h3 id="dialog-title" style="margin: 0; font-size: 16px;">Add Entry</h3>
+            <button id="dialog-close-btn" class="drawer-close">✕</button>
+        </div>
+        <div class="drawer-content" id="dialog-body" style="padding: 20px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto;">
+            <!-- Form fields dynamically inserted -->
+        </div>
+        <div style="padding: 14px 20px; display: flex; gap: 12px; border-top: 1px solid rgba(255,255,255,0.05); justify-content: flex-end;">
+            <button id="dialog-cancel-btn" class="btn btn-secondary" style="margin: 0; width: auto; padding: 10px 18px;">Cancel</button>
+            <button id="dialog-save-btn" class="btn btn-primary" style="margin: 0; width: auto; padding: 10px 22px;">Save</button>
         </div>
     </div>
 

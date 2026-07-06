@@ -2692,6 +2692,10 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
                     zoom_create_time = r.get("create_time")
                     zoom_country = r.get("country")
+                    zoom_reg_id = r.get("id")
+                    zoom_custom_q = r.get("custom_questions")
+                    import json
+                    zoom_metadata_json = json.dumps(zoom_custom_q) if zoom_custom_q else None
                     
                     user_record = existing_users.get(email)
                     
@@ -2700,17 +2704,23 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                         # Insert user
                         if zoom_create_time:
                             cursor.execute(
-                                "INSERT INTO users (registered_email, telegram_id, global_status, created_at, country) VALUES (?, ?, ?, ?, ?)",
-                                (email, None, db_status, zoom_create_time, zoom_country)
+                                "INSERT INTO users (registered_email, telegram_id, global_status, created_at, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                (email, None, db_status, zoom_create_time, zoom_country, zoom_reg_id, zoom_metadata_json)
                             )
                         else:
                             cursor.execute(
-                                "INSERT INTO users (registered_email, telegram_id, global_status, country) VALUES (?, ?, ?, ?)",
-                                (email, None, db_status, zoom_country)
+                                "INSERT INTO users (registered_email, telegram_id, global_status, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                                (email, None, db_status, zoom_country, zoom_reg_id, zoom_metadata_json)
                             )
                         sync_count += 1
                         # Add to local dictionary to avoid duplicate insertions in the same run
-                        existing_users[email] = {"registered_email": email, "global_status": db_status, "created_at": zoom_create_time, "country": zoom_country}
+                        existing_users[email] = {
+                            "registered_email": email,
+                            "global_status": db_status,
+                            "created_at": zoom_create_time,
+                            "country": zoom_country,
+                            "zoom_registrant_id": zoom_reg_id
+                        }
                     else:
                         # Check if status needs update
                         status_changed = False
@@ -2727,6 +2737,20 @@ async def synczoom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                             cursor.execute(
                                 "UPDATE users SET country = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
                                 (zoom_country, email)
+                            )
+                        
+                        # Update registrant ID if Zoom returns one and it is different
+                        if zoom_reg_id and user_record.get("zoom_registrant_id") != zoom_reg_id:
+                            cursor.execute(
+                                "UPDATE users SET zoom_registrant_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (zoom_reg_id, email)
+                            )
+                        
+                        # Update custom answers metadata if Zoom returns one and it is different
+                        if zoom_metadata_json:
+                            cursor.execute(
+                                "UPDATE users SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (zoom_metadata_json, email)
                             )
                         
                         # Backfill timestamp if needed
