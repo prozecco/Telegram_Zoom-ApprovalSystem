@@ -152,29 +152,33 @@ def init_db():
             );
         """)
 
-        # Migration: Safely add join_url column to users table if it doesn't exist
-        try:
+    # Migration: Safely add join_url column to users table if it doesn't exist
+    try:
+        with get_db() as cursor:
             execute_query(cursor, "ALTER TABLE users ADD COLUMN join_url TEXT;")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
-        # Migration: Safely add country column to users table if it doesn't exist
-        try:
+    # Migration: Safely add country column to users table if it doesn't exist
+    try:
+        with get_db() as cursor:
             execute_query(cursor, "ALTER TABLE users ADD COLUMN country TEXT;")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
-        # Migration: Safely add zoom_registrant_id column to users table if it doesn't exist
-        try:
+    # Migration: Safely add zoom_registrant_id column to users table if it doesn't exist
+    try:
+        with get_db() as cursor:
             execute_query(cursor, "ALTER TABLE users ADD COLUMN zoom_registrant_id TEXT;")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
-        # Migration: Safely add metadata column to users table if it doesn't exist
-        try:
+    # Migration: Safely add metadata column to users table if it doesn't exist
+    try:
+        with get_db() as cursor:
             execute_query(cursor, "ALTER TABLE users ADD COLUMN metadata TEXT;")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
 def get_setting(key: str, default: str = None) -> str | None:
     """
