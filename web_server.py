@@ -458,6 +458,20 @@ async def get_admin_stats(admin_user = Depends(verify_admin_access)):
             cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Denied'")
             denied = cursor.fetchone()["count"]
             
+            # Query New Pending (<= 3 days)
+            if storage.IS_POSTGRES:
+                cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND created_at >= NOW() - INTERVAL '3 days'")
+            else:
+                cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND created_at >= datetime('now', '-3 days')")
+            new_count = cursor.fetchone()["count"]
+            
+            # Query On Hold Pending (> 3 days)
+            if storage.IS_POSTGRES:
+                cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND created_at < NOW() - INTERVAL '3 days'")
+            else:
+                cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND created_at < datetime('now', '-3 days')")
+            on_hold_count = cursor.fetchone()["count"]
+            
             last_sync = storage.get_setting("last_zoom_sync") or "Never"
             
             return {
@@ -465,6 +479,8 @@ async def get_admin_stats(admin_user = Depends(verify_admin_access)):
                 "pending": pending,
                 "approved": approved,
                 "denied": denied,
+                "new": new_count,
+                "on_hold": on_hold_count,
                 "last_sync": last_sync
             }
     except Exception as e:

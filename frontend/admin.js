@@ -90,6 +90,21 @@ async function fetchStats() {
         if (lastSyncStatusEl && stats.last_sync) {
             lastSyncStatusEl.textContent = `Last synced: ${stats.last_sync}`;
         }
+        
+        // Update filter pills with their dynamic counts
+        const pillNew = document.querySelector('.filter-pills .pill[data-filter="New"]');
+        const pillOnHold = document.querySelector('.filter-pills .pill[data-filter="OnHold"]');
+        const pillPending = document.querySelector('.filter-pills .pill[data-filter="Pending"]');
+        const pillApproved = document.querySelector('.filter-pills .pill[data-filter="Approved"]');
+        const pillDenied = document.querySelector('.filter-pills .pill[data-filter="Denied"]');
+        const pillAll = document.querySelector('.filter-pills .pill[data-filter="All"]');
+        
+        if (pillNew) pillNew.textContent = `🆕 New (≤3d) (${stats.new || 0})`;
+        if (pillOnHold) pillOnHold.textContent = `⏳ On Hold (>3d) (${stats.on_hold || 0})`;
+        if (pillPending) pillPending.textContent = `🟡 All Pending (${stats.pending || 0})`;
+        if (pillApproved) pillApproved.textContent = `🟢 Approved (${stats.approved || 0})`;
+        if (pillDenied) pillDenied.textContent = `🔴 Denied (${stats.denied || 0})`;
+        if (pillAll) pillAll.textContent = `📋 All (${stats.total || 0})`;
     } catch (err) {
         console.error(err);
     }
@@ -176,6 +191,32 @@ function getStatusBadge(status) {
     return '<span class="badge badge-pending">Pending</span>';
 }
 
+function getRelativeTimeAndDate(dateString) {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    let relativeStr = '';
+    if (diffMins < 1) {
+        relativeStr = 'just now';
+    } else if (diffMins < 60) {
+        relativeStr = `${diffMins}m ago`;
+    } else if (diffHours < 24) {
+        relativeStr = `${diffHours}h ago`;
+    } else if (diffDays < 30) {
+        relativeStr = `${diffDays}d ago`;
+    } else {
+        relativeStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+    
+    const absDateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return `· ${relativeStr} (${absDateStr})`;
+}
+
 function renderRequestsList(requestsArray, targetElement, isDirectoryView) {
     if (requestsArray.length === 0) {
         targetElement.innerHTML = `
@@ -239,8 +280,7 @@ function renderRequestsList(requestsArray, targetElement, isDirectoryView) {
         if (req.created_at) {
             const timeSpan = document.createElement('span');
             timeSpan.className = 'card-time';
-            const dateStr = new Date(req.created_at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
-            timeSpan.textContent = `· ${dateStr}`;
+            timeSpan.textContent = getRelativeTimeAndDate(req.created_at);
             metaDiv.appendChild(timeSpan);
         }
         mainInfo.appendChild(metaDiv);
