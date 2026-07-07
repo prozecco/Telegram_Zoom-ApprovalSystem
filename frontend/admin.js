@@ -1344,18 +1344,19 @@ function exportToCSV() {
         ]);
     });
     
-    const csvContent = "data:text/csv;charset=utf-8," 
-        + rows.map(e => e.map(val => `"${val}"`).join(",")).join("\n");
-        
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     const filename = `registrants_export_${activeTab}_${new Date().toISOString().split('T')[0]}.csv`;
     link.setAttribute("download", filename);
     document.body.appendChild(link);
     
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     
     tg?.HapticFeedback?.notificationOccurred('success');
 }
@@ -1384,18 +1385,19 @@ function exportToZoomCSV() {
         ]);
     });
     
-    const csvContent = "data:text/csv;charset=utf-8," 
-        + rows.map(e => e.map(val => `"${val.replace(/"/g, '""')}"`).join(",")).join("\n");
-        
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     const filename = `zoom_import_registrants_${activeTab}_${new Date().toISOString().split('T')[0]}.csv`;
     link.setAttribute("download", filename);
     document.body.appendChild(link);
     
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     
     tg?.HapticFeedback?.notificationOccurred('success');
 }
