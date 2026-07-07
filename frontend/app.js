@@ -64,7 +64,8 @@ function getHeaders() {
 }
 
 // Fetch Zoom registration questions on load
-async function loadQuestions() {
+// Fetch Zoom registration questions on load
+async function loadQuestions(userProfile = null) {
     showLoading();
     try {
         const response = await fetch('/api/questions');
@@ -72,8 +73,23 @@ async function loadQuestions() {
             throw new Error(`Server returned HTTP ${response.status}`);
         }
         zoomQuestionsData = await response.json();
-        renderStandardQuestions();
-        renderCustomQuestions();
+        renderStandardQuestions(userProfile);
+        renderCustomQuestions(userProfile);
+        
+        if (userProfile) {
+            const firstNameInput = document.getElementById('first_name');
+            const lastNameInput = document.getElementById('last_name');
+            const emailInput = document.getElementById('email');
+            
+            if (firstNameInput) firstNameInput.value = userProfile.first_name || '';
+            if (lastNameInput) lastNameInput.value = userProfile.last_name || '';
+            if (emailInput) {
+                emailInput.value = userProfile.email || '';
+                emailInput.readOnly = true;
+                emailInput.style.opacity = '0.7';
+            }
+        }
+        
         showForm();
     } catch (error) {
         console.error('Failed to load questions:', error);
@@ -107,7 +123,7 @@ function hideAllGatewayStates() {
 }
 
 // Dynamically render custom questions fetched from Zoom API
-function renderCustomQuestions() {
+function renderCustomQuestions(userProfile = null) {
     customQuestionsContainer.innerHTML = '';
     
     if (!zoomQuestionsData || !zoomQuestionsData.custom_questions) {
@@ -124,6 +140,12 @@ function renderCustomQuestions() {
         
         let inputField;
         
+        let existingAnswer = '';
+        if (userProfile && userProfile.metadata) {
+            const match = userProfile.metadata.find(m => m.title.trim().toLowerCase() === q.title.trim().toLowerCase());
+            if (match) existingAnswer = match.value || '';
+        }
+        
         // If question has predefined answers, render a dropdown select list
         if (q.answers && q.answers.length > 0) {
             inputField = document.createElement('select');
@@ -136,13 +158,16 @@ function renderCustomQuestions() {
             placeholderOpt.value = '';
             placeholderOpt.textContent = '-- Select an Option --';
             placeholderOpt.disabled = true;
-            placeholderOpt.selected = true;
+            if (!existingAnswer) placeholderOpt.selected = true;
             inputField.appendChild(placeholderOpt);
             
             q.answers.forEach(answer => {
                 const opt = document.createElement('option');
                 opt.value = answer;
                 opt.textContent = answer;
+                if (existingAnswer && existingAnswer.trim().toLowerCase() === answer.trim().toLowerCase()) {
+                    opt.selected = true;
+                }
                 inputField.appendChild(opt);
             });
         } else {
@@ -152,6 +177,7 @@ function renderCustomQuestions() {
             inputField.name = `custom_question_${idx}`;
             inputField.dataset.title = q.title;
             inputField.placeholder = 'Your answer...';
+            if (existingAnswer) inputField.value = existingAnswer;
             if (q.required) inputField.required = true;
         }
         
@@ -161,7 +187,7 @@ function renderCustomQuestions() {
 }
 
 // Dynamically render standard questions required by Zoom (e.g. Country)
-function renderStandardQuestions() {
+function renderStandardQuestions(userProfile = null) {
     standardQuestionsContainer.innerHTML = '';
     
     if (!zoomQuestionsData || !zoomQuestionsData.questions) {
@@ -185,6 +211,11 @@ function renderStandardQuestions() {
         
         let inputField;
         
+        let existingVal = '';
+        if (userProfile) {
+            if (fieldName === 'country') existingVal = userProfile.country || '';
+        }
+        
         // Render country selector as a dropdown for better UX
         if (fieldName === 'country') {
             inputField = document.createElement('select');
@@ -196,7 +227,7 @@ function renderStandardQuestions() {
             placeholderOpt.value = '';
             placeholderOpt.textContent = '-- Select Country --';
             placeholderOpt.disabled = true;
-            placeholderOpt.selected = true;
+            if (!existingVal) placeholderOpt.selected = true;
             inputField.appendChild(placeholderOpt);
             
             const countries = [
@@ -222,6 +253,9 @@ function renderStandardQuestions() {
                 const opt = document.createElement('option');
                 opt.value = c.code;
                 opt.textContent = c.name;
+                if (existingVal && (existingVal.toUpperCase() === c.code || existingVal.toLowerCase() === c.name.toLowerCase())) {
+                    opt.selected = true;
+                }
                 inputField.appendChild(opt);
             });
         } else {
@@ -230,6 +264,7 @@ function renderStandardQuestions() {
             inputField.name = `std_field_${fieldName}`;
             inputField.dataset.standardField = fieldName;
             inputField.placeholder = `Enter your ${labelText.toLowerCase()}...`;
+            if (existingVal) inputField.value = existingVal;
             if (q.required) inputField.required = true;
         }
         
@@ -361,6 +396,12 @@ function routeUser(data) {
     }
     
     if (data.role === 'active_user') {
+        if (data.needs_additional_info) {
+            const banner = document.getElementById('additional-info-banner');
+            if (banner) banner.classList.remove('hidden');
+            loadQuestions(data.user_profile);
+            return;
+        }
         welcomeNameEl.textContent = data.name || 'User';
         joinBtnLink.href = data.join_url || '#';
         routerWelcomeEl.classList.remove('hidden');
@@ -369,6 +410,12 @@ function routeUser(data) {
     }
     
     if (data.role === 'pending') {
+        if (data.needs_additional_info) {
+            const banner = document.getElementById('additional-info-banner');
+            if (banner) banner.classList.remove('hidden');
+            loadQuestions(data.user_profile);
+            return;
+        }
         pendingNameEl.textContent = data.name || 'User';
         routerPendingEl.classList.remove('hidden');
         return;

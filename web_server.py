@@ -278,7 +278,7 @@ async def verify_auth_role(authorization: str = Header(None)):
         storage.execute_query(
             cursor, 
             """
-            SELECT registered_email, global_status, join_url,
+            SELECT registered_email, global_status, join_url, metadata, country,
                    (SELECT s.submitted_zoom_name FROM submissions_history s 
                     WHERE s.registered_email = u.registered_email 
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name 
@@ -302,7 +302,7 @@ async def verify_auth_role(authorization: str = Header(None)):
                 storage.execute_query(
                     cursor,
                     """
-                    SELECT registered_email, global_status, join_url,
+                    SELECT registered_email, global_status, join_url, metadata, country,
                            (SELECT s.submitted_zoom_name FROM submissions_history s 
                             WHERE s.registered_email = u.registered_email 
                             ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name 
@@ -323,6 +323,39 @@ async def verify_auth_role(authorization: str = Header(None)):
     zoom_name = row["zoom_name"] or fullname
     join_url = row["join_url"]
     
+    needs_additional_info = False
+    user_metadata = []
+    if row.get("metadata"):
+        try:
+            user_metadata = json.loads(row["metadata"])
+        except Exception:
+            pass
+            
+    try:
+        current_questions = zoom_service.get_custom_questions()
+        answered_titles = {item.get("title", "").strip().lower() for item in user_metadata if item.get("value")}
+        for cq in current_questions.get("custom_questions", []):
+            if cq.get("required"):
+                title = cq.get("title", "").strip().lower()
+                if title not in answered_titles:
+                    needs_additional_info = True
+                    break
+    except Exception as e:
+        logger.warning(f"Failed to check required questions in verify: {e}")
+
+    # Parse first name and last name
+    name_parts = (zoom_name or "").split(" ", 1)
+    f_name = name_parts[0] if name_parts else ""
+    l_name = name_parts[1] if len(name_parts) > 1 else ""
+
+    user_profile = {
+        "first_name": f_name,
+        "last_name": l_name,
+        "email": row["registered_email"],
+        "country": row["country"] or "",
+        "metadata": user_metadata
+    }
+    
     if status == "Blacklisted":
         return {
             "role": "blacklisted",
@@ -333,7 +366,9 @@ async def verify_auth_role(authorization: str = Header(None)):
             "role": "active_user",
             "telegram_id": telegram_id,
             "name": zoom_name,
-            "join_url": join_url
+            "join_url": join_url,
+            "needs_additional_info": needs_additional_info,
+            "user_profile": user_profile if needs_additional_info else None
         }
     else:
         # Status is Pending or Denied or On Hold
@@ -341,7 +376,9 @@ async def verify_auth_role(authorization: str = Header(None)):
             "role": "pending",
             "telegram_id": telegram_id,
             "name": zoom_name,
-            "status": status
+            "status": status,
+            "needs_additional_info": needs_additional_info,
+            "user_profile": user_profile if needs_additional_info else None
         }
 
 @app.post("/api/register")
