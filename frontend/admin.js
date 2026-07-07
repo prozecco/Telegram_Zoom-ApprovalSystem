@@ -214,6 +214,7 @@ function getStatusBadge(status) {
     const normalized = status ? status.toLowerCase() : 'pending';
     if (normalized === 'approved') return '<span class="badge badge-approved">Approved</span>';
     if (normalized === 'denied') return '<span class="badge badge-denied">Denied</span>';
+    if (normalized === 'cancelled') return '<span class="badge badge-cancelled">Cancelled</span>';
     if (normalized === 'blacklisted') return '<span class="badge badge-blacklisted">Blacklisted</span>';
     return '<span class="badge badge-pending">Pending</span>';
 }

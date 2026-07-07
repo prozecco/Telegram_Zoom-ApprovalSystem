@@ -414,6 +414,12 @@ async def verify_auth_role(authorization: str = Header(None)):
             "role": "blacklisted",
             "telegram_id": telegram_id
         }
+    elif user_status == "Cancelled":
+        return {
+            "role": "guest",
+            "telegram_id": telegram_id,
+            "name": fullname
+        }
     elif user_status == "Approved":
         return {
             "role": "active_user",
@@ -769,43 +775,12 @@ async def perform_admin_action(req: AdminActionRequest, admin_user = Depends(ver
                 continue
                 
             # Perform action on Zoom API
-            # Perform action on Zoom API
-            if req.action in ("Pending", "On Hold"):
-                try:
-                    zoom_service.update_registrant_status(email, "cancel")
-                except Exception as ze:
-                    logger.error(f"Zoom API error during cancel for {email}: {ze}")
-                    failed_emails.append((email, f"Zoom API failed: {str(ze)}"))
-                    continue
-                
-                # Fetch history for name and username before deleting
-                history = storage.get_submissions_by_email(email)
-                zoom_name = history[0]["submitted_zoom_name"] if history else "Zoom Registrant"
-                
-                with storage.get_db() as cursor:
-                    storage.execute_query(cursor, "DELETE FROM submissions_history WHERE LOWER(registered_email) = LOWER(?)", (email,))
-                    storage.execute_query(cursor, "DELETE FROM users WHERE LOWER(registered_email) = LOWER(?)", (email,))
-                
-                # Send status update alert to the group chat (NOTIFICATION_CHAT_ID)
-                try:
-                    await bot.send_message(
-                        chat_id=config.NOTIFICATION_CHAT_ID,
-                        text=(
-                            f"🔄 <b>User Registration RESET / CANCELLED</b>\n\n"
-                            f"- <b>Zoom Name:</b> {html.escape(zoom_name)}\n"
-                            f"- <b>Email:</b> <code>{html.escape(email)}</code>\n"
-                            f"- <b>Actioned By:</b> {html.escape(admin_name)} (Admin ID: <code>{admin_tg_id}</code>)"
-                        ),
-                        parse_mode="HTML"
-                    )
-                except Exception as ae:
-                    logger.error(f"Failed to alert notification group of admin action: {ae}")
-                
-                success_emails.append(email)
-                continue
-                
-            if req.action in ("Approve", "Deny"):
-                zoom_action = "approve" if req.action == "Approve" else "deny"
+            if req.action in ("Approve", "Deny", "Cancelled", "Pending", "On Hold"):
+                zoom_action = (
+                    "approve" if req.action == "Approve" 
+                    else "deny" if req.action == "Deny" 
+                    else "cancel"
+                )
                 try:
                     zoom_service.update_registrant_status(email, zoom_action)
                 except Exception as ze:
@@ -824,8 +799,17 @@ async def perform_admin_action(req: AdminActionRequest, admin_user = Depends(ver
                     zoom_service.update_registrant_status(email, "deny")
                 except Exception:
                     pass
+            elif req.action in ("Pending", "On Hold"):
+                db_status = "Pending"
+            elif req.action == "Cancelled":
+                db_status = "Cancelled"
                     
             storage.update_user_status(email, db_status)
+            
+            # Clear join_url if set back to Pending or Cancelled
+            if db_status in ("Pending", "Cancelled"):
+                with storage.get_db() as cursor:
+                    storage.execute_query(cursor, "UPDATE users SET join_url = NULL WHERE LOWER(registered_email) = LOWER(?)", (email,))
             
             # Record in submissions history
             active_meeting_id = zoom_service.meeting_id
