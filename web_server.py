@@ -101,6 +101,10 @@ class AdminSettingsUpdateRequest(BaseModel):
     zoom_registration_link: str
     zoom_sync_interval: str
 
+class AdminTeamAddRequest(BaseModel):
+    telegram_id: int
+    username: Optional[str] = None
+
 def verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
     """
     Cryptographically verifies Telegram WebApp initData to prevent ID spoofing.
@@ -162,6 +166,10 @@ def get_admin_keyboard(sub_id: int) -> InlineKeyboardMarkup:
     """
     Generates inline keyboards matching app.py for the Admin Decision Card.
     """
+    from telegram import WebAppInfo
+    mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
+    is_https_webapp = mini_app_url.lower().startswith("https://")
+    
     keyboard = [
         [
             InlineKeyboardButton("Approve ✅", callback_data=f"approve_{sub_id}"),
@@ -176,6 +184,10 @@ def get_admin_keyboard(sub_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton("History 📜", callback_data=f"viewhist_{sub_id}")
         ]
     ]
+    if is_https_webapp:
+        admin_dashboard_url = mini_app_url.rstrip('/') + '/admin.html'
+        keyboard.insert(0, [InlineKeyboardButton("📊 Open Admin Dashboard", web_app=WebAppInfo(url=admin_dashboard_url))])
+        
     return InlineKeyboardMarkup(keyboard)
 
 @app.get("/health")
@@ -933,6 +945,53 @@ async def update_admin_settings(req: AdminSettingsUpdateRequest, admin_user = De
         logger.error(f"Failed to save settings: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/admin/team")
+async def get_admin_team(admin_user = Depends(verify_admin_access)):
+    try:
+        owner_record = {
+            "telegram_id": int(config.ADMIN_CHAT_ID),
+            "username": "Owner / Super-Admin",
+            "added_at": "System Default",
+            "is_owner": True
+        }
+        admins = storage.get_admins()
+        formatted_admins = []
+        for a in admins:
+            formatted_admins.append({
+                "telegram_id": a["telegram_id"],
+                "username": a["username"] or "Unknown",
+                "added_at": a["added_at"],
+                "is_owner": False
+            })
+        return [owner_record] + formatted_admins
+    except Exception as e:
+        logger.error(f"Failed to load admin team: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/team")
+async def add_admin_team_member(req: AdminTeamAddRequest, admin_user = Depends(verify_admin_access)):
+    try:
+        if int(req.telegram_id) == int(config.ADMIN_CHAT_ID):
+            return {"status": "success", "message": "User is the owner and already has super-admin rights."}
+            
+        storage.add_admin(req.telegram_id, req.username.strip() if req.username else None)
+        return {"status": "success", "message": "Administrator added successfully"}
+    except Exception as e:
+        logger.error(f"Failed to add administrator: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/admin/team/{telegram_id}")
+async def remove_admin_team_member(telegram_id: int, admin_user = Depends(verify_admin_access)):
+    try:
+        if int(telegram_id) == int(config.ADMIN_CHAT_ID):
+            raise HTTPException(status_code=400, detail="Cannot revoke permissions from the primary super-admin owner.")
+            
+        storage.remove_admin(telegram_id)
+        return {"status": "success", "message": "Administrator revoked successfully"}
+    except Exception as e:
+        logger.error(f"Failed to revoke administrator: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 async def sync_zoom_data() -> int:
     """
     Core synchronization function. Fetches registrants from Zoom and updates database.
@@ -1068,8 +1127,9 @@ async def sync_zoom_data() -> int:
                         )
                     existing_history.add(email)
                     
-    from datetime import datetime, timezone
-    storage.set_setting("last_zoom_sync", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+    from datetime import datetime, timezone, timedelta
+    bangkok_tz = timezone(timedelta(hours=7))
+    storage.set_setting("last_zoom_sync", datetime.now(bangkok_tz).strftime("%Y-%m-%d %H:%M:%S GMT+7"))
     return sync_count
 
 @app.post("/api/admin/sync")

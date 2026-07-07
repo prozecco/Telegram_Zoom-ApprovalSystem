@@ -404,6 +404,39 @@ const urlParams = new URLSearchParams(window.location.search);
 const isPreviewMode = urlParams.get('preview') === 'true';
 
 if (isPreviewMode) {
+    const simBar = document.getElementById('simulation-bar');
+    if (simBar) simBar.classList.remove('hidden');
+    
+    document.querySelectorAll('.sim-btn').forEach(btn => {
+        btn.onclick = () => {
+            document.querySelectorAll('.sim-btn').forEach(b => {
+                b.style.background = 'rgba(255,255,255,0.05)';
+                b.style.color = 'var(--tg-theme-text-color)';
+                b.classList.remove('active');
+            });
+            
+            btn.style.background = 'var(--tg-theme-button-color, #2481cc)';
+            btn.style.color = 'var(--tg-theme-button-text-color, #ffffff)';
+            btn.classList.add('active');
+            
+            const targetSim = btn.dataset.sim;
+            hideAllGatewayStates();
+            
+            if (targetSim === 'guest') {
+                showForm();
+            } else if (targetSim === 'pending') {
+                pendingNameEl.textContent = 'Simulated Admin';
+                routerPendingEl.classList.remove('hidden');
+            } else if (targetSim === 'approved') {
+                welcomeNameEl.textContent = 'Simulated Admin';
+                joinBtnLink.href = 'https://zoom.us';
+                routerWelcomeEl.classList.remove('hidden');
+            } else if (targetSim === 'denied') {
+                routerBlockedEl.classList.remove('hidden');
+            }
+        };
+    });
+    
     loadQuestions();
 } else {
     initGateway();

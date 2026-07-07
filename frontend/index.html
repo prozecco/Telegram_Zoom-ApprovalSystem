@@ -13,6 +13,16 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <!-- Interactive Admin Simulation Bar -->
+    <div id="simulation-bar" class="hidden" style="position: sticky; top: 0; z-index: 9999; background: var(--tg-theme-secondary-bg-color, #242f3d); padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; align-items: center; width: 100%;">
+        <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--tg-theme-hint-color, #9ca3af);">🛠️ Admin Preview Role Simulator</span>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; width: 100%;">
+            <button type="button" class="btn btn-secondary sim-btn active" data-sim="guest" style="font-size: 11px; padding: 6px 10px; margin: 0; border-radius: 6px; height: auto; line-height: normal; flex: 1; min-width: 75px; background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #ffffff);">Guest Form</button>
+            <button type="button" class="btn btn-secondary sim-btn" data-sim="pending" style="font-size: 11px; padding: 6px 10px; margin: 0; border-radius: 6px; height: auto; line-height: normal; flex: 1; min-width: 75px; background: rgba(255,255,255,0.05); color: var(--tg-theme-text-color);">Pending</button>
+            <button type="button" class="btn btn-secondary sim-btn" data-sim="approved" style="font-size: 11px; padding: 6px 10px; margin: 0; border-radius: 6px; height: auto; line-height: normal; flex: 1; min-width: 75px; background: rgba(255,255,255,0.05); color: var(--tg-theme-text-color);">Approved</button>
+            <button type="button" class="btn btn-secondary sim-btn" data-sim="denied" style="font-size: 11px; padding: 6px 10px; margin: 0; border-radius: 6px; height: auto; line-height: normal; flex: 1; min-width: 75px; background: rgba(255,255,255,0.05); color: var(--tg-theme-text-color);">Denied</button>
+        </div>
+    </div>
     <div class="app-container">
         <header class="app-header">
             <div class="logo-container">

@@ -533,10 +533,23 @@
 
             <!-- TAB 2: USERS (Directory & Management) -->
             <section id="tab-users" class="tab-pane hidden">
-                <div class="controls-panel" style="margin-bottom: 16px;">
+                <div class="controls-panel" style="margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px;">
                     <div class="search-box-wrapper" style="width: 100%;">
                         <span class="search-icon">🔍</span>
                         <input type="text" id="global-search-input" placeholder="Search Telegram, Zoom Name, Email in directory...">
+                    </div>
+                    <div style="display: flex; gap: 8px; width: 100%;">
+                        <select id="directory-filter-status" style="flex: 1; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color, #242f3d); color: var(--tg-theme-text-color, #ffffff); font-size: 12px; outline: none;">
+                            <option value="All">All Statuses</option>
+                            <option value="Approved">Approved</option>
+                            <option value="Denied">Denied</option>
+                            <option value="Pending">Pending</option>
+                        </select>
+                        <select id="directory-filter-origin" style="flex: 1; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color, #242f3d); color: var(--tg-theme-text-color, #ffffff); font-size: 12px; outline: none;">
+                            <option value="All">All Origins</option>
+                            <option value="Linked">Telegram Linked</option>
+                            <option value="Zoom">Zoom Web</option>
+                        </select>
                     </div>
                 </div>
 
@@ -575,23 +588,52 @@
                             <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Registration Link</label>
                             <input type="text" id="zoom-registration-link-input" placeholder="https://zoom.us/meeting/register/..." style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;">
                         </div>
-                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
-                            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Background Sync Interval</label>
-                            <input type="text" id="zoom-sync-interval-input" placeholder="e.g. 10 minutes, 1 hour, 45s, Disabled" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;">
-                            <span style="font-size: 10px; color: var(--tg-theme-hint-color);">Supports text inputs (e.g. 45s, 10 minutes, 1 hour, 3 days, or Disabled)</span>
-                        </div>
                         
                         <button id="save-settings-btn" class="btn btn-primary" style="width: 100%; margin: 8px 0 0 0; font-weight: 600;">Save Credentials</button>
                     </div>
                 </div>
 
                 <div class="tools-card">
-                    <h3>Zoom Manual Synchronization</h3>
-                    <p style="font-size: 12px; color: var(--tg-theme-hint-color); margin: 0 0 6px 0;">Synchronize all registrant status updates and registration timestamps directly from the Zoom Meetings API immediately.</p>
-                    <button id="sync-zoom-btn" class="btn btn-secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);">
-                        🔄 <span id="sync-btn-text">Sync Zoom Registrants</span>
-                    </button>
-                    <p id="last-sync-status" class="hint-text" style="font-size: 11px; color: var(--tg-theme-hint-color); margin: 4px 0 0 0; font-style: italic;">Last synced: Never</p>
+                    <h3>Zoom Synchronization</h3>
+                    <p style="font-size: 11px; color: var(--tg-theme-hint-color); margin: 0 0 10px 0;">Configure background automation sync interval or execute manual sync instantly.</p>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; width: 100%;">
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Background Sync Interval</label>
+                            <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
+                                <input type="text" id="zoom-sync-interval-input" placeholder="e.g. 10 minutes, 1 hour, 45s, Disabled" style="flex: 1; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none; font-size: 13px;">
+                                <button id="save-interval-btn" class="btn btn-primary" style="width: auto; margin: 0; padding: 0 16px; height: 38px; line-height: 38px; font-size: 12px; font-weight: 600;">Save</button>
+                            </div>
+                            <span style="font-size: 10px; color: var(--tg-theme-hint-color); margin-top: 2px;">Supports: 45s, 10 minutes, 1 hour, 3 days, or Disabled</span>
+                        </div>
+                        
+                        <div style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 12px;">
+                            <button id="sync-zoom-btn" class="btn btn-secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);">
+                                🔄 <span id="sync-btn-text">Sync Zoom Registrants Now</span>
+                            </button>
+                            <p id="last-sync-status" class="hint-text" style="font-size: 11px; color: var(--tg-theme-hint-color); margin: 6px 0 0 0; font-style: italic; text-align: center;">Last synced: Never</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tools-card">
+                    <h3>Admin Team Management</h3>
+                    <p style="font-size: 11px; color: var(--tg-theme-hint-color); margin: 0 0 10px 0;">Manage secondary administrator privileges by adding or removing users. Owner cannot be removed.</p>
+                    
+                    <div id="admin-team-list" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; max-height: 200px; overflow-y: auto;">
+                        <!-- JavaScript will populate list -->
+                    </div>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px; box-sizing: border-box; width: 100%;">
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Add New Admin</label>
+                            <div style="display: flex; gap: 8px; width: 100%;">
+                                <input type="number" id="add-admin-id-input" placeholder="Telegram ID (e.g. 9876543)" style="flex: 1; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none; font-size: 13px;">
+                                <input type="text" id="add-admin-username-input" placeholder="Username" style="width: 110px; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none; font-size: 13px;">
+                            </div>
+                        </div>
+                        <button id="add-admin-btn" class="btn btn-secondary" style="width: 100%; margin: 4px 0 0 0; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);">👤 Add Administrator</button>
+                    </div>
                 </div>
                 
                 <div class="tools-card">

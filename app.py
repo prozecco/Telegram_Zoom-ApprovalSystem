@@ -142,6 +142,9 @@ def get_user_menu_markup(user_id: int) -> InlineKeyboardMarkup:
 
 # Helper to generate the administrative inline keyboard (standard registration)
 def get_admin_keyboard(sub_id: int) -> InlineKeyboardMarkup:
+    mini_app_url = storage.get_setting("mini_app_url", os.getenv("MINI_APP_URL", "http://localhost:7860"))
+    is_https_webapp = mini_app_url.lower().startswith("https://")
+    
     keyboard = [
         [
             InlineKeyboardButton("Approve ✅", callback_data=f"approve_{sub_id}"),
@@ -159,6 +162,10 @@ def get_admin_keyboard(sub_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton("Back to List 📋", callback_data="admin_requests")
         ]
     ]
+    if is_https_webapp:
+        admin_dashboard_url = mini_app_url.rstrip('/') + '/admin.html'
+        keyboard.insert(0, [InlineKeyboardButton("📊 Open Admin Dashboard", web_app=WebAppInfo(url=admin_dashboard_url))])
+        
     return InlineKeyboardMarkup(keyboard)
 
 _zoom_health_cache = None

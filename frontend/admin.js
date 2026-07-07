@@ -60,6 +60,17 @@ const zoomClientSecretInput = document.getElementById('zoom-client-secret-input'
 const zoomRegistrationLinkInput = document.getElementById('zoom-registration-link-input');
 const zoomSyncIntervalInput = document.getElementById('zoom-sync-interval-input');
 const saveSettingsBtn = document.getElementById('save-settings-btn');
+const saveIntervalBtn = document.getElementById('save-interval-btn');
+
+// Admin Team Elements
+const adminTeamList = document.getElementById('admin-team-list');
+const addAdminIdInput = document.getElementById('add-admin-id-input');
+const addAdminUsernameInput = document.getElementById('add-admin-username-input');
+const addAdminBtn = document.getElementById('add-admin-btn');
+
+// Advanced Directory Filters
+const directoryFilterStatus = document.getElementById('directory-filter-status');
+const directoryFilterOrigin = document.getElementById('directory-filter-origin');
 
 // Dialog Elements
 const dialogOverlay = document.getElementById('dialog-overlay');
@@ -914,6 +925,7 @@ document.querySelectorAll('.bottom-nav .nav-item').forEach(item => {
             await fetchDirectory();
         } else if (activeTab === 'tools') {
             await fetchSettings();
+            await fetchAdminTeam();
             await fetchStats();
         }
     };
@@ -1006,7 +1018,7 @@ async function fetchDirectory() {
         if (!response.ok) throw new Error('Directory fetch failed');
         
         allDirectoryUsers = await response.json();
-        renderRequestsList(allDirectoryUsers, usersDirectoryListEl, true);
+        renderFilteredDirectory();
     } catch (err) {
         console.error(err);
         usersDirectoryListEl.innerHTML = `
@@ -1016,6 +1028,181 @@ async function fetchDirectory() {
         `;
     }
 }
+
+function renderFilteredDirectory() {
+    const statusVal = directoryFilterStatus.value;
+    const originVal = directoryFilterOrigin.value;
+    
+    let filtered = allDirectoryUsers;
+    
+    if (statusVal !== 'All') {
+        filtered = filtered.filter(u => (u.global_status || 'Pending').toLowerCase() === statusVal.toLowerCase());
+    }
+    
+    if (originVal !== 'All') {
+        filtered = filtered.filter(u => {
+            const hasTg = u.telegram_id && u.telegram_id !== 0;
+            if (originVal === 'Linked') return hasTg;
+            if (originVal === 'Zoom') return !hasTg;
+            return true;
+        });
+    }
+    
+    renderRequestsList(filtered, usersDirectoryListEl, true);
+}
+
+// Bind Advanced Directory Filter Select Handlers
+directoryFilterStatus.onchange = renderFilteredDirectory;
+directoryFilterOrigin.onchange = renderFilteredDirectory;
+
+// Sync Interval Save handler
+saveIntervalBtn.onclick = async () => {
+    if (saveIntervalBtn.disabled) return;
+    try {
+        saveIntervalBtn.disabled = true;
+        saveIntervalBtn.textContent = 'Saving...';
+        
+        const getRes = await fetch('/api/admin/settings', { headers: getHeaders() });
+        if (!getRes.ok) throw new Error("Failed to load existing settings");
+        const current = await getRes.json();
+        
+        const payload = {
+            zoom_meeting_id: current.zoom_meeting_id || '',
+            zoom_account_id: current.zoom_account_id || '',
+            zoom_client_id: current.zoom_client_id || '',
+            zoom_client_secret: current.zoom_client_secret || '',
+            zoom_registration_link: current.zoom_registration_link || '',
+            zoom_sync_interval: zoomSyncIntervalInput.value.trim()
+        };
+        
+        const response = await fetch('/api/admin/settings', {
+            method: 'PUT',
+            headers: getHeaders(),
+            body: JSON.stringify(payload)
+        });
+        
+        if (response.ok) {
+            alert("Synchronization interval updated successfully!");
+            tg?.HapticFeedback?.notificationOccurred('success');
+        } else {
+            const err = await response.json();
+            alert("Failed to save sync interval: " + (err.detail || "Unknown error"));
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error saving sync interval.");
+    } finally {
+        saveIntervalBtn.disabled = false;
+        saveIntervalBtn.textContent = 'Save';
+    }
+};
+
+// Admin Team CRUD handlers
+async function fetchAdminTeam() {
+    try {
+        adminTeamList.innerHTML = `
+            <div style="text-align: center; padding: 10px; color: var(--tg-theme-hint-color);">
+                <div class="spinner" style="width: 16px; height: 16px; margin: 0 auto 5px;"></div>
+                Loading team...
+            </div>
+        `;
+        const response = await fetch('/api/admin/team', { headers: getHeaders() });
+        if (!response.ok) throw new Error("Failed to load admin team list");
+        const team = await response.json();
+        renderAdminTeam(team);
+    } catch (err) {
+        console.error(err);
+        adminTeamList.innerHTML = `<div style="color: #ef4444; font-size: 12px; text-align: center;">❌ Failed to load team list</div>`;
+    }
+}
+
+function renderAdminTeam(teamArray) {
+    adminTeamList.innerHTML = '';
+    teamArray.forEach(admin => {
+        const row = document.createElement('div');
+        row.style = 'display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 8px; font-size: 13px; margin-bottom: 6px; box-sizing: border-box;';
+        
+        const details = document.createElement('div');
+        details.style = 'display: flex; flex-direction: column; gap: 2px;';
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.style = 'font-weight: 500; color: var(--tg-theme-text-color); text-align: left;';
+        nameSpan.textContent = admin.username + (admin.is_owner ? ' 👑' : '');
+        
+        const idSpan = document.createElement('span');
+        idSpan.style = 'font-size: 10px; color: var(--tg-theme-hint-color); text-align: left;';
+        idSpan.textContent = `ID: ${admin.telegram_id}`;
+        
+        details.appendChild(nameSpan);
+        details.appendChild(idSpan);
+        row.appendChild(details);
+        
+        if (!admin.is_owner) {
+            const revokeBtn = document.createElement('button');
+            revokeBtn.className = 'btn btn-secondary';
+            revokeBtn.style = 'margin: 0; padding: 4px 8px; font-size: 11px; height: auto; line-height: normal; background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.25); width: auto;';
+            revokeBtn.textContent = 'Revoke';
+            revokeBtn.onclick = async () => {
+                if (confirm(`Are you sure you want to revoke admin permissions from ${admin.username}?`)) {
+                    try {
+                        const res = await fetch(`/api/admin/team/${admin.telegram_id}`, {
+                            method: 'DELETE',
+                            headers: getHeaders()
+                        });
+                        if (res.ok) {
+                            alert("Administrator revoked successfully!");
+                            fetchAdminTeam();
+                        } else {
+                            const err = await res.json();
+                            alert("Failed: " + (err.detail || "Unknown error"));
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        alert("Error revoking admin.");
+                    }
+                }
+            };
+            row.appendChild(revokeBtn);
+        }
+        adminTeamList.appendChild(row);
+    });
+}
+
+addAdminBtn.onclick = async () => {
+    const tgId = parseInt(addAdminIdInput.value.trim());
+    const username = addAdminUsernameInput.value.trim();
+    if (isNaN(tgId)) {
+        alert("Please enter a valid numeric Telegram User ID.");
+        return;
+    }
+    if (addAdminBtn.disabled) return;
+    try {
+        addAdminBtn.disabled = true;
+        addAdminBtn.textContent = 'Adding...';
+        
+        const response = await fetch('/api/admin/team', {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify({ telegram_id: tgId, username: username || null })
+        });
+        
+        if (response.ok) {
+            alert("Administrator added successfully!");
+            addAdminIdInput.value = '';
+            addAdminUsernameInput.value = '';
+            fetchAdminTeam();
+        } else {
+            const err = await response.json();
+            alert("Failed: " + (err.detail || "Unknown error"));
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error adding administrator.");
+    } finally {
+        addAdminBtn.disabled = false;
+        addAdminBtn.textContent = '👤 Add Administrator';
+    }
+};
 
 function exportToCSV() {
     const dataToExport = activeTab === 'users' ? allDirectoryUsers : allRequests;
