@@ -186,7 +186,7 @@ async function runAction(emails, actionName) {
             
             if (currentOpenEmail && emails.includes(currentOpenEmail)) {
                 // If the currently open user details is one of the modified ones, update details status badge
-                document.getElementById('detail-status').innerHTML = getStatusBadge(actionName === 'Approve' ? 'Approved' : actionName === 'Deny' ? 'Denied' : 'Blacklisted');
+                detailStatusSelect.innerHTML = getStatusBadge(actionName === 'Approve' ? 'Approved' : actionName === 'Deny' ? 'Denied' : 'Blacklisted');
             }
         } else {
             alert(`Failed: ${result.failed} actions failed.`);

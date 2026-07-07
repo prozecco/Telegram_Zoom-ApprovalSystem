@@ -59,7 +59,9 @@ async def get_telegram_avatar_url(telegram_id: int) -> str | None:
         if photos and photos.total_count > 0:
             file_id = photos.photos[0][-1].file_id
             file = await bot.get_file(file_id)
-            return file.file_path
+            # file.file_path is a relative path like "photos/file_123.jpg";
+            # prepend the Telegram Bot API base URL to form a usable full URL.
+            return f"https://api.telegram.org/file/bot{config.TELEGRAM_BOT_TOKEN}/{file.file_path}"
     except Exception as e:
         logger.warning(f"Failed to fetch Telegram avatar for {telegram_id}: {e}")
     return None
@@ -151,8 +153,8 @@ def verify_admin_access(authorization: str = Header(...)) -> dict:
     Dependency to verify Telegram WebApp initData signature and check admin status.
     Expects initData in the 'Authorization' header.
     """
-    # Allow testing bypass if token is mock or empty (for tests/local debug)
-    if authorization == "MOCK_TOKEN" or not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "MOCK_TOKEN":
+    # Allow testing bypass only in local/dev mode (no production DATABASE_URL set)
+    if authorization == "MOCK_TOKEN" and not storage.IS_POSTGRES:
         return {"id": config.ADMIN_CHAT_ID, "first_name": "Test Admin", "username": "admin"}
 
     data = verify_telegram_init_data(authorization, config.TELEGRAM_BOT_TOKEN)
@@ -246,8 +248,8 @@ async def verify_auth_role(authorization: str = Header(None)):
             detail="No authorization header provided."
         )
         
-    if authorization == "MOCK_TOKEN" or not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "MOCK_TOKEN":
-        # Mock admin role for testing or configuration
+    if authorization == "MOCK_TOKEN" and not storage.IS_POSTGRES:
+        # Mock admin role for local/dev testing only
         return {
             "role": "admin",
             "telegram_id": config.ADMIN_CHAT_ID,
@@ -342,7 +344,7 @@ async def verify_auth_role(authorization: str = Header(None)):
             "name": fullname
         }
         
-    status = row["global_status"]
+    user_status = row["global_status"]
     zoom_name = row["zoom_name"] or fullname
     join_url = row["join_url"]
     
@@ -407,12 +409,12 @@ async def verify_auth_role(authorization: str = Header(None)):
         "metadata": user_metadata
     }
     
-    if status == "Blacklisted":
+    if user_status == "Blacklisted":
         return {
             "role": "blacklisted",
             "telegram_id": telegram_id
         }
-    elif status == "Approved":
+    elif user_status == "Approved":
         return {
             "role": "active_user",
             "telegram_id": telegram_id,
@@ -427,7 +429,7 @@ async def verify_auth_role(authorization: str = Header(None)):
             "role": "pending",
             "telegram_id": telegram_id,
             "name": zoom_name,
-            "status": status,
+            "status": user_status,
             "needs_additional_info": needs_additional_info,
             "user_profile": user_profile if needs_additional_info else None
         }
@@ -684,7 +686,25 @@ async def get_admin_requests(
         with storage.get_db() as conn:
             cursor = conn.execute(query_str, tuple(params))
             rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+            results = []
+            for row in rows:
+                r = dict(row)
+                tg_username = r.get("telegram_username")
+                if not tg_username or tg_username.strip().lower() == "none":
+                    # Check metadata custom questions
+                    try:
+                        metadata = json.loads(r.get("metadata")) if r.get("metadata") else []
+                        if isinstance(metadata, list):
+                            for item in metadata:
+                                if item.get("title", "").strip().lower() == "telegram username":
+                                    val = item.get("value", "").strip().replace("@", "")
+                                    if val:
+                                        r["telegram_username"] = val
+                                        break
+                    except Exception:
+                        pass
+                results.append(r)
+            return results
     except Exception as e:
         logger.error(f"Failed to fetch requests for admin: {e}")
         raise HTTPException(
@@ -715,7 +735,7 @@ async def save_admin_notes(req: AdminNotesRequest, admin_user = Depends(verify_a
     try:
         email = req.email.strip().lower()
         notes = req.notes.strip()
-        success = storage.update_user_status(email, None, behavior_notes=notes)
+        success = storage.update_behavior_notes(email, notes)
         if success:
             return {"status": "success", "message": "Behavior notes updated successfully."}
         else:
@@ -1010,11 +1030,19 @@ async def get_admin_settings(admin_user = Depends(verify_admin_access)):
         zoom_registration_link = storage.get_setting("zoom_registration_link", config.ZOOM_REGISTRATION_LINK)
         zoom_sync_interval = storage.get_setting("zoom_sync_interval", "10 minutes")
         
+        # Mask the client secret: show only the last 4 characters
+        masked_secret = ""
+        if zoom_client_secret:
+            if len(zoom_client_secret) > 4:
+                masked_secret = "****" + zoom_client_secret[-4:]
+            else:
+                masked_secret = "****"
+        
         return {
             "zoom_meeting_id": zoom_meeting_id,
             "zoom_account_id": zoom_account_id,
             "zoom_client_id": zoom_client_id,
-            "zoom_client_secret": zoom_client_secret,
+            "zoom_client_secret": masked_secret,
             "zoom_registration_link": zoom_registration_link,
             "zoom_sync_interval": zoom_sync_interval,
             "userbot_configured": userbot_service.client is not None

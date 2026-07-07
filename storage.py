@@ -458,6 +458,35 @@ def update_user_status(email: str, status: str, behavior_notes: str = None) -> b
         )
         return True
 
+def update_behavior_notes(email: str, notes: str) -> bool:
+    """
+    Updates only the behavior_notes for a user without modifying global_status.
+    """
+    email = email.strip()
+    with get_db() as cursor:
+        execute_query(cursor, "SELECT registered_email, behavior_notes FROM users WHERE LOWER(registered_email) = LOWER(?)", (email,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        
+        actual_email = row["registered_email"]
+        existing_notes = row["behavior_notes"] or ""
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        new_note_entry = f"[{timestamp}] {notes}"
+        updated_notes = f"{existing_notes}\n{new_note_entry}".strip() if existing_notes else new_note_entry
+
+        execute_query(
+            cursor,
+            """
+            UPDATE users 
+            SET behavior_notes = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE registered_email = ?
+            """,
+            (updated_notes, actual_email)
+        )
+        return True
+
 def log_historical_action(email: str, zoom_name: str, telegram_username: str, meeting_id: str, action: str):
     """
     Convenience method to write directly to submissions_history when admin updates a status.
