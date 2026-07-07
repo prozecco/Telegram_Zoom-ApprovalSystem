@@ -1001,6 +1001,17 @@ async function fetchSettings() {
             zoomClientSecretInput.value = data.zoom_client_secret || '';
             zoomRegistrationLinkInput.value = data.zoom_registration_link || '';
             zoomSyncIntervalInput.value = data.zoom_sync_interval || '10 minutes';
+            
+            // Update resolver card status
+            if (!data.userbot_configured) {
+                tgResolveBtn.disabled = true;
+                tgResolveQueryInput.disabled = true;
+                tgResolveResult.classList.remove('hidden');
+                tgResolveResult.innerHTML = `
+                    <div style="color: #f59e0b; font-weight: 600; margin-bottom: 2px;">⚠️ Userbot Not Configured</div>
+                    <div style="color: var(--tg-theme-hint-color); font-size: 11px;">Set <code>TELEGRAM_API_ID</code>, <code>TELEGRAM_API_HASH</code>, and <code>TELEGRAM_SESSION_STRING</code> environment variables on your server to enable this feature.</div>
+                `;
+            }
         }
     } catch (err) {
         console.error("Failed to load settings:", err);

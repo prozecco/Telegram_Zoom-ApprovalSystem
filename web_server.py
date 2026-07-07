@@ -1016,7 +1016,8 @@ async def get_admin_settings(admin_user = Depends(verify_admin_access)):
             "zoom_client_id": zoom_client_id,
             "zoom_client_secret": zoom_client_secret,
             "zoom_registration_link": zoom_registration_link,
-            "zoom_sync_interval": zoom_sync_interval
+            "zoom_sync_interval": zoom_sync_interval,
+            "userbot_configured": userbot_service.client is not None
         }
     except Exception as e:
         logger.error(f"Failed to fetch admin settings: {e}")
@@ -1091,10 +1092,15 @@ async def remove_admin_team_member(telegram_id: int, admin_user = Depends(verify
 
 @app.post("/api/admin/resolve-telegram")
 async def resolve_telegram_details(req: TelegramResolveRequest, admin_user = Depends(verify_admin_access)):
+    if not userbot_service.client:
+        raise HTTPException(
+            status_code=503, 
+            detail="Userbot is not configured. Set TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_SESSION_STRING environment variables on Render to enable this feature."
+        )
     try:
         resolved = await userbot_service.resolve_entity(req.query)
         if not resolved:
-            raise HTTPException(status_code=404, detail="Could not resolve entity. Ensure userbot is configured and the username/ID is valid.")
+            raise HTTPException(status_code=404, detail=f"Could not resolve '{req.query}'. The username or ID may not exist, or the userbot session may have expired.")
         return {"status": "success", "resolved": resolved}
     except HTTPException:
         raise
