@@ -185,8 +185,8 @@ async function runAction(emails, actionName) {
             }
             
             if (currentOpenEmail && emails.includes(currentOpenEmail)) {
-                // If the currently open user details is one of the modified ones, update details status badge
-                detailStatusSelect.innerHTML = getStatusBadge(actionName === 'Approve' ? 'Approved' : actionName === 'Deny' ? 'Denied' : 'Blacklisted');
+                // If the currently open user details is one of the modified ones, update details status select value
+                detailStatusSelect.value = actionName === 'Approve' ? 'Approved' : actionName === 'Deny' ? 'Denied' : 'Blacklisted';
             }
         } else {
             alert(`Failed: ${result.failed} actions failed.`);

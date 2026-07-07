@@ -1057,7 +1057,9 @@ async def update_admin_settings(req: AdminSettingsUpdateRequest, admin_user = De
         storage.set_setting("zoom_meeting_id", req.zoom_meeting_id.strip())
         storage.set_setting("zoom_account_id", req.zoom_account_id.strip())
         storage.set_setting("zoom_client_id", req.zoom_client_id.strip())
-        storage.set_setting("zoom_client_secret", req.zoom_client_secret.strip())
+        new_secret = req.zoom_client_secret.strip()
+        if not new_secret.startswith("****"):
+            storage.set_setting("zoom_client_secret", new_secret)
         storage.set_setting("zoom_registration_link", req.zoom_registration_link.strip())
         storage.set_setting("zoom_sync_interval", req.zoom_sync_interval.strip())
         
