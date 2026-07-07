@@ -180,10 +180,10 @@ class ZoomService:
         
         Parameters:
         - email: The registrant's email.
-        - action: Either 'approve' or 'deny'
+        - action: 'approve', 'deny', or 'cancel'
         """
-        if action not in ["approve", "deny"]:
-            raise ValueError("Action must be either 'approve' or 'deny'")
+        if action not in ["approve", "deny", "cancel"]:
+            raise ValueError("Action must be 'approve', 'deny', or 'cancel'")
             
         token = self._get_access_token()
         url = f"https://api.zoom.us/v2/meetings/{self.meeting_id}/registrants/status"

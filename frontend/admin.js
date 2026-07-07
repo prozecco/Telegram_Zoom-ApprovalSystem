@@ -51,6 +51,7 @@ const addHistoryBtn = document.getElementById('add-history-btn');
 const usersDirectoryListEl = document.getElementById('users-directory-list');
 const globalSearchInputEl = document.getElementById('global-search-input');
 const exportCsvBtn = document.getElementById('export-csv-btn');
+const exportZoomCsvBtn = document.getElementById('export-zoom-csv-btn');
 const lastSyncStatusEl = document.getElementById('last-sync-status');
 
 // Settings Input Elements
@@ -989,6 +990,10 @@ exportCsvBtn.onclick = () => {
     exportToCSV();
 };
 
+exportZoomCsvBtn.onclick = () => {
+    exportToZoomCSV();
+};
+
 // Settings CRUD handlers
 async function fetchSettings() {
     try {
@@ -1345,6 +1350,46 @@ function exportToCSV() {
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
     const filename = `registrants_export_${activeTab}_${new Date().toISOString().split('T')[0]}.csv`;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    
+    link.click();
+    document.body.removeChild(link);
+    
+    tg?.HapticFeedback?.notificationOccurred('success');
+}
+
+function exportToZoomCSV() {
+    const dataToExport = activeTab === 'users' ? allDirectoryUsers : allRequests;
+    if (dataToExport.length === 0) {
+        alert("No data available to export.");
+        return;
+    }
+    
+    // Header row matching Zoom's CSV import format: Email, First Name, Last Name
+    const headers = ['Email', 'First Name', 'Last Name'];
+    const rows = [headers];
+    
+    dataToExport.forEach(user => {
+        // Parse First Name and Last Name from Zoom Name
+        const nameParts = (user.zoom_name || 'Zoom Registrant').trim().split(/\s+/);
+        const firstName = nameParts[0] || 'Zoom';
+        const lastName = nameParts.slice(1).join(' ') || '.'; // Zoom requires a last name, using period if none
+        
+        rows.push([
+            user.registered_email || '',
+            firstName,
+            lastName
+        ]);
+    });
+    
+    const csvContent = "data:text/csv;charset=utf-8," 
+        + rows.map(e => e.map(val => `"${val.replace(/"/g, '""')}"`).join(",")).join("\n");
+        
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    const filename = `zoom_import_registrants_${activeTab}_${new Date().toISOString().split('T')[0]}.csv`;
     link.setAttribute("download", filename);
     document.body.appendChild(link);
     

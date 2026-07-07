@@ -769,8 +769,12 @@ async def perform_admin_action(req: AdminActionRequest, admin_user = Depends(ver
                 continue
                 
             # Perform action on Zoom API
-            if req.action in ("Approve", "Deny"):
-                zoom_action = "approve" if req.action == "Approve" else "deny"
+            if req.action in ("Approve", "Deny", "Pending", "On Hold"):
+                zoom_action = (
+                    "approve" if req.action == "Approve" 
+                    else "deny" if req.action == "Deny" 
+                    else "cancel"
+                )
                 try:
                     zoom_service.update_registrant_status(email, zoom_action)
                 except Exception as ze:
@@ -793,6 +797,11 @@ async def perform_admin_action(req: AdminActionRequest, admin_user = Depends(ver
                 db_status = "Pending"
                     
             storage.update_user_status(email, db_status)
+            
+            # Clear join_url if set back to Pending
+            if db_status == "Pending":
+                with storage.get_db() as cursor:
+                    storage.execute_query(cursor, "UPDATE users SET join_url = NULL WHERE LOWER(registered_email) = LOWER(?)", (email,))
             
             # Record in submissions history
             active_meeting_id = zoom_service.meeting_id
