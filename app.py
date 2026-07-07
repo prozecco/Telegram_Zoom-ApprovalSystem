@@ -90,8 +90,7 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
     
     keyboard = [
         [
-            InlineKeyboardButton("📋 View Requests List", callback_data="admin_requests"),
-            InlineKeyboardButton("✏️ View Name Changes", callback_data="admin_name_changes")
+            InlineKeyboardButton("📋 View Requests List", callback_data="admin_requests")
         ],
         [
             InlineKeyboardButton("🔍 Search User", callback_data="admin_search"),
@@ -127,10 +126,6 @@ def get_user_menu_markup(user_id: int) -> InlineKeyboardMarkup:
     first_row.append(InlineKeyboardButton("📝 Request Approval", callback_data="user_register"))
     
     keyboard = [first_row]
-    
-    user_record = storage.get_user_by_telegram_id(user_id)
-    if user_record and user_record["global_status"] == "Approved":
-        keyboard.append([InlineKeyboardButton("✏️ Request Name Change", callback_data="user_name_change")])
         
     keyboard.append([InlineKeyboardButton("ℹ️ How It Works", callback_data="user_help")])
     
@@ -674,165 +669,7 @@ async def back_to_name_callback(update: Update, context: ContextTypes.DEFAULT_TY
 # USER CONVERSATION FLOW (NAME CHANGES)
 # ==========================================
 
-async def start_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Starts the Zoom Name Change conversation flow.
-    """
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    user_record = storage.get_user_by_telegram_id(user_id)
-    if not user_record:
-        await query.message.reply_text("⚠️ You must have an approved registration before requesting a name change.")
-        return ConversationHandler.END
-        
-    context.user_data["registered_email"] = user_record["registered_email"]
-    
-    keyboard = [[InlineKeyboardButton("Cancel ❌", callback_data="cancel_name_change")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.message.reply_text(
-        "✏️ <b>Zoom Name Change Request</b>\n\n"
-        "✍️ Please type your <b>new Zoom Display Name</b> exactly as it appears on Zoom:",
-        reply_markup=reply_markup,
-        parse_mode="HTML"
-    )
-    return AWAIT_NEW_NAME_INPUT
 
-async def name_change_input_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Prompts user to submit or cancel their requested new display name.
-    """
-    new_name = update.message.text.strip()
-    if not new_name:
-        await update.message.reply_text("⚠️ Name cannot be empty. Please type again:")
-        return AWAIT_NEW_NAME_INPUT
-        
-    context.user_data["new_name"] = new_name
-    email = context.user_data["registered_email"]
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("Submit Request ✅", callback_data="submit_name_change"),
-            InlineKeyboardButton("Cancel ❌", callback_data="cancel_name_change")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "Please confirm your name change request details:\n\n"
-        f"📧 <b>Registered Email:</b> {html.escape(email)}\n"
-        f"✏️ <b>New Zoom Name:</b> {html.escape(new_name)}\n\n"
-        "Do you want to submit this request?",
-        reply_markup=reply_markup,
-        parse_mode="HTML"
-    )
-    return AWAIT_NEW_NAME_INPUT
-
-async def submit_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Logs the name change request to submissions_history as NameChangePending and notifies admins.
-    """
-    query = update.callback_query
-    await query.answer()
-    
-    email = context.user_data["registered_email"]
-    new_name = context.user_data["new_name"]
-    telegram_id = query.from_user.id
-    telegram_username = query.from_user.username or "None"
-    active_meeting_id = storage.get_setting("zoom_meeting_id", config.ZOOM_MEETING_ID)
-    
-    # Fetch previous name details and name changes count
-    with storage.get_db() as conn:
-        cursor = conn.execute(
-            """
-            SELECT submitted_zoom_name FROM submissions_history
-            WHERE registered_email = ? AND action_taken IN ('Approved', 'ApprovedNameChange')
-            ORDER BY action_timestamp DESC LIMIT 1
-            """,
-            (email,)
-        )
-        prev = cursor.fetchone()
-        prev_name = prev["submitted_zoom_name"] if prev else "None"
-        
-        cursor = conn.execute(
-            "SELECT COUNT(*) as count FROM submissions_history WHERE registered_email = ? AND action_taken = 'ApprovedNameChange'",
-            (email,)
-        )
-        name_change_count = cursor.fetchone()["count"]
-
-    # Log to submissions_history (leaves global_status in users unchanged as 'Approved')
-    sub_id = storage.add_submission(
-        email=email,
-        telegram_id=telegram_id,
-        zoom_name=new_name,
-        telegram_username=telegram_username,
-        meeting_id=active_meeting_id,
-        action_taken="NameChangePending"
-    )
-    
-    # Notify Admin (Compact Format with Old Name and Name Change metrics)
-    admin_message = (
-        f"✏️ <b>Zoom Name Change Request</b>\n\n"
-        f"👤 <b>User Details:</b>\n"
-        f"- <b>Email:</b> <code>{html.escape(email)}</code>\n"
-        f"- <b>Telegram:</b> @{html.escape(telegram_username)} (ID: <code>{telegram_id}</code>)\n\n"
-        f"⏪ <b>Current Approved Name:</b> <code>{html.escape(prev_name)}</code>\n"
-        f"⏩ <b>Requested New Name:</b> <code>{html.escape(new_name)}</code>\n\n"
-        f"📊 <b>History:</b> Approved name changes: {name_change_count} times.\n\n"
-        "Please choose an action:"
-    )
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("Approve Name Change ✅", callback_data=f"apprname_{sub_id}"),
-            InlineKeyboardButton("Deny Name Change ❌", callback_data=f"denyname_{sub_id}")
-        ],
-        [
-            InlineKeyboardButton("History 📜", callback_data=f"viewhist_{sub_id}")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await context.bot.send_message(
-        chat_id=config.NOTIFICATION_CHAT_ID,
-        text=admin_message,
-        reply_markup=reply_markup,
-        parse_mode="HTML"
-    )
-    
-    # Respond to user
-    await query.message.reply_text("✅ Your name change request has been submitted for administrator review.")
-    context.user_data.clear()
-    
-    # Back to user menu
-    reply_markup_user = get_user_menu_markup(query.from_user.id)
-    await query.message.reply_text(
-        "Return to main menu:",
-        reply_markup=reply_markup_user
-    )
-    return ConversationHandler.END
-
-async def cancel_name_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Cancels the name change conversation and returns to user menu.
-    """
-    query = update.callback_query
-    if query:
-        await query.answer()
-        context.user_data.clear()
-        
-        reply_markup = get_user_menu_markup(query.from_user.id)
-        await query.message.reply_text(
-            "❌ Name change request cancelled.\n\n"
-            "Return to main menu:",
-            reply_markup=reply_markup
-        )
-    else:
-        await update.message.reply_text("Name change request cancelled.")
-        context.user_data.clear()
-    return ConversationHandler.END
 
 # ==========================================
 # ADMIN DASHBOARD DECISION CALLBACKS
@@ -2341,116 +2178,7 @@ async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     else:
         await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="HTML")
 
-async def admin_name_changes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Lists all pending Zoom name change requests.
-    """
-    if not storage.is_admin(update.effective_user.id):
-        await reply_helper(update, "Unauthorized access.")
-        return
-        
-    with storage.get_db() as conn:
-        cursor = conn.execute(
-            """
-            SELECT s.id, s.registered_email, s.submitted_zoom_name
-            FROM submissions_history s
-            WHERE s.action_taken = 'NameChangePending'
-            ORDER BY s.action_timestamp DESC
-            """
-        )
-        rows = cursor.fetchall()
-        
-    message = "✏️ <b>Pending Zoom Name Change Requests:</b>\n\n"
-    keyboard = []
-    
-    if rows:
-        for row in rows:
-            sub_id = row["id"]
-            email = row["registered_email"]
-            new_name = row["submitted_zoom_name"]
-            
-            message += f"- ✏️ {html.escape(new_name)} (<code>{html.escape(email)}</code>)\n"
-            keyboard.append([InlineKeyboardButton(f"✏️ Review: {new_name}", callback_data=f"reviewname_{sub_id}")])
-    else:
-        message += "<i>No pending name change requests found.</i>"
-        
-    keyboard.append([InlineKeyboardButton("Back to panel 🛡️", callback_data="back_to_admin_panel")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await reply_helper(update, message, reply_markup=reply_markup)
 
-async def review_name_change_card(update: Update, context: ContextTypes.DEFAULT_TYPE, sub_id: int) -> None:
-    """
-    Builds and sends the compact name change review card to the administrator.
-    """
-    user_id = update.effective_user.id
-    with storage.get_db() as conn:
-        cursor = conn.execute(
-            """
-            SELECT s.*, u.behavior_notes 
-            FROM submissions_history s
-            JOIN users u ON s.registered_email = u.registered_email
-            WHERE s.id = ?
-            """,
-            (sub_id,)
-        )
-        submission = cursor.fetchone()
-        
-    if not submission:
-        await context.bot.send_message(chat_id=user_id, text="⚠️ Error: Submission record not found.")
-        return
-        
-    email = submission["registered_email"]
-    new_name = submission["submitted_zoom_name"]
-    telegram_username = submission["submitted_telegram_username"]
-    
-    # Get previous name (latest approved name change or initial registration)
-    with storage.get_db() as conn:
-        cursor = conn.execute(
-            """
-            SELECT submitted_zoom_name 
-            FROM submissions_history 
-            WHERE registered_email = ? AND action_taken IN ('Approved', 'ApprovedNameChange')
-            ORDER BY action_timestamp DESC LIMIT 1
-            """,
-            (email,)
-        )
-        prev = cursor.fetchone()
-        prev_name = prev["submitted_zoom_name"] if prev else "Unknown (Approved)"
-        
-        cursor = conn.execute(
-            "SELECT COUNT(*) as count FROM submissions_history WHERE registered_email = ? AND action_taken = 'ApprovedNameChange'",
-            (email,)
-        )
-        name_change_count = cursor.fetchone()["count"]
-        
-    card = (
-        f"✏️ <b>Zoom Name Change Review Card</b>\n\n"
-        f"📧 <b>User Email:</b> <code>{html.escape(email)}</code>\n"
-        f"💬 <b>Telegram:</b> @{html.escape(telegram_username)}\n\n"
-        f"⏪ <b>Current Approved Name:</b> <code>{html.escape(prev_name)}</code>\n"
-        f"⏩ <b>Requested New Name:</b> <code>{html.escape(new_name)}</code>\n\n"
-        f"📊 <b>History:</b> Approved name changes: {name_change_count} times.\n\n"
-        f"Please choose an action:"
-    )
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("Approve Name Change ✅", callback_data=f"apprname_{sub_id}"),
-            InlineKeyboardButton("Deny Name Change ❌", callback_data=f"denyname_{sub_id}")
-        ],
-        [
-            InlineKeyboardButton("History 📜", callback_data=f"viewhist_{sub_id}"),
-            InlineKeyboardButton("Back to List 📋", callback_data="admin_name_changes")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=card,
-        reply_markup=reply_markup,
-        parse_mode="HTML"
-    )
 
 async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -2867,25 +2595,7 @@ def main() -> None:
     )
     application.add_handler(conv_handler)
 
-    # 3.4 Add Conversational Handler for User Name Change requests
-    name_change_conv_handler = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(start_name_change, pattern="^user_name_change$")
-        ],
-        states={
-            AWAIT_NEW_NAME_INPUT: [
-                CallbackQueryHandler(submit_name_change, pattern="^submit_name_change$"),
-                CallbackQueryHandler(cancel_name_change, pattern="^cancel_name_change$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, name_change_input_received)
-            ]
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel_name_change),
-            CallbackQueryHandler(cancel_name_change, pattern="^cancel_name_change$")
-        ],
-        allow_reentry=True
-    )
-    application.add_handler(name_change_conv_handler)
+
 
     # 3.5 Add Conversational Handler for Admin Variable Configurations
     config_conv_handler = ConversationHandler(
@@ -2963,12 +2673,12 @@ def main() -> None:
 
     # 4. Add Admin Dashboard Callbacks
     application.add_handler(
-        CallbackQueryHandler(admin_decision_callback, pattern="^(approve|deny|later|blacklist|editnotes|reviewreq|reviewname|apprname|denyname|viewhist)_\\d+$")
+        CallbackQueryHandler(admin_decision_callback, pattern="^(approve|deny|later|blacklist|editnotes|reviewreq|viewhist)_\\d+$")
     )
     
     # 4.5 Add Main Menu Navigation Callbacks
     application.add_handler(
-        CallbackQueryHandler(admin_menu_callback, pattern="^(admin_requests|admin_name_changes|admin_config|admin_report|back_to_admin_panel|reqpage_\\d+.*|admin_search|admin_synczoom)$")
+        CallbackQueryHandler(admin_menu_callback, pattern="^(admin_requests|admin_config|admin_report|back_to_admin_panel|reqpage_\\d+.*|admin_search|admin_synczoom)$")
     )
     application.add_handler(
         CallbackQueryHandler(user_menu_callback, pattern="^(user_link|user_help|back_to_user_menu|switch_to_user_menu)$")
