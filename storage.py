@@ -102,10 +102,16 @@ def init_db():
                 country TEXT,
                 zoom_registrant_id TEXT,
                 metadata TEXT,
+                photo_url TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        
+        try:
+            execute_query(cursor, "ALTER TABLE users ADD COLUMN photo_url TEXT")
+        except Exception:
+            pass
         
         # 2. Form Submissions History (auto-increment syntax difference handled)
         if IS_POSTGRES:

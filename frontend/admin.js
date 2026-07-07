@@ -29,6 +29,7 @@ const bulkCountEl = document.getElementById('bulk-count');
 const drawerOverlay = document.getElementById('drawer-overlay');
 const drawer = document.getElementById('drawer');
 const drawerCloseBtn = document.getElementById('drawer-close-btn');
+const drawerAvatarEl = document.getElementById('drawer-avatar');
 
 // Detail Modal Elements
 const detailNameEl = document.getElementById('detail-name');
@@ -310,6 +311,19 @@ function renderRequestsList(requestsArray, targetElement, isDirectoryView) {
             metaDiv.appendChild(timeSpan);
         }
         mainInfo.appendChild(metaDiv);
+        const avatarImg = document.createElement('div');
+        avatarImg.className = 'card-avatar';
+        avatarImg.style = 'width: 36px; height: 36px; border-radius: 50%; background: var(--tg-theme-secondary-bg-color, rgba(255,255,255,0.05)); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; margin-right: 10px; flex-shrink: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.08);';
+        
+        if (req.photo_url) {
+            const img = document.createElement('img');
+            img.src = req.photo_url;
+            img.style = 'width: 100%; height: 100%; object-fit: cover;';
+            avatarImg.appendChild(img);
+        } else {
+            avatarImg.textContent = (req.zoom_name || 'M')[0].toUpperCase();
+        }
+        card.appendChild(avatarImg);
         card.appendChild(mainInfo);
         
         if (!isDirectoryView) {
@@ -394,6 +408,16 @@ async function openDrawer(user) {
     detailNameEl.textContent = user.zoom_name || 'Manual Profile';
     detailEmailEl.textContent = user.registered_email;
     detailCountryEl.textContent = user.country ? `${user.country}` : 'Not Specified';
+    
+    drawerAvatarEl.innerHTML = '';
+    if (user.photo_url) {
+        const img = document.createElement('img');
+        img.src = user.photo_url;
+        img.style = 'width: 100%; height: 100%; object-fit: cover;';
+        drawerAvatarEl.appendChild(img);
+    } else {
+        drawerAvatarEl.textContent = (user.zoom_name || 'M')[0].toUpperCase();
+    }
     
     const tgUsername = user.telegram_username ? `@${user.telegram_username}` : 'No Telegram account';
     const tgIdStr = user.telegram_id ? ` (ID: ${user.telegram_id})` : '';

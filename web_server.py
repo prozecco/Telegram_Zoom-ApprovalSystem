@@ -49,8 +49,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Telegram Bot client for Admin card delivery
 bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+
+async def get_telegram_avatar_url(telegram_id: int) -> str | None:
+    if not telegram_id or telegram_id == 0:
+        return None
+    try:
+        photos = await bot.get_user_profile_photos(user_id=telegram_id, limit=1)
+        if photos and photos.total_count > 0:
+            file_id = photos.photos[0][-1].file_id
+            file = await bot.get_file(file_id)
+            return file.file_path
+    except Exception as e:
+        logger.warning(f"Failed to fetch Telegram avatar for {telegram_id}: {e}")
+    return None
 
 # Pydantic schemas
 class CustomQuestionAnswer(BaseModel):
@@ -200,10 +212,18 @@ def health_check():
 @app.get("/api/questions")
 async def get_questions():
     """
-    Fetches the custom registration questions from Zoom API.
+    Fetches the custom registration questions from Zoom API (cached).
     """
     try:
+        cached_qs = storage.get_setting("zoom_custom_questions")
+        if cached_qs:
+            try:
+                return json.loads(cached_qs)
+            except Exception:
+                pass
+                
         questions_data = zoom_service.get_custom_questions()
+        storage.set_setting("zoom_custom_questions", json.dumps(questions_data))
         return questions_data
     except Exception as e:
         logger.error(f"Failed to fetch Zoom custom questions: {e}")
@@ -331,8 +351,21 @@ async def verify_auth_role(authorization: str = Header(None)):
         except Exception:
             pass
             
+    current_questions = {}
+    cached_qs = storage.get_setting("zoom_custom_questions")
+    if cached_qs:
+        try:
+            current_questions = json.loads(cached_qs)
+        except Exception:
+            pass
+    if not current_questions:
+        try:
+            current_questions = zoom_service.get_custom_questions()
+            storage.set_setting("zoom_custom_questions", json.dumps(current_questions))
+        except Exception as e:
+            logger.warning(f"Failed to fetch Zoom custom questions: {e}")
+
     try:
-        current_questions = zoom_service.get_custom_questions()
         answered_titles = {item.get("title", "").strip().lower() for item in user_metadata if item.get("value")}
         for cq in current_questions.get("custom_questions", []):
             if cq.get("required"):
@@ -342,6 +375,21 @@ async def verify_auth_role(authorization: str = Header(None)):
                     break
     except Exception as e:
         logger.warning(f"Failed to check required questions in verify: {e}")
+
+    # Fetch/update Telegram avatar if missing
+    avatar_url = row.get("photo_url")
+    if not avatar_url and telegram_id and telegram_id != 0:
+        avatar_url = await get_telegram_avatar_url(telegram_id)
+        if avatar_url:
+            try:
+                with storage.get_db() as cursor:
+                    storage.execute_query(
+                        cursor,
+                        "UPDATE users SET photo_url = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                        (avatar_url, row["registered_email"])
+                    )
+            except Exception as e:
+                logger.error(f"Failed to update user photo_url: {e}")
 
     # Parse first name and last name
     name_parts = (zoom_name or "").split(" ", 1)
@@ -460,6 +508,15 @@ async def register_user(req: RegisterRequest):
             country=country_code,
             custom_questions=zoom_questions
         )
+        
+        avatar_url = await get_telegram_avatar_url(telegram_id)
+        if avatar_url:
+            with storage.get_db() as cursor:
+                storage.execute_query(
+                    cursor,
+                    "UPDATE users SET photo_url = ? WHERE telegram_id = ?",
+                    (avatar_url, telegram_id)
+                )
     except Exception as e:
         logger.error(f"Database insertion failed: {e}")
         raise HTTPException(
@@ -574,7 +631,7 @@ async def get_admin_requests(
     """
     try:
         query_str = """
-            SELECT u.registered_email, u.telegram_id, u.global_status, u.created_at, u.country, u.behavior_notes, u.metadata,
+            SELECT u.registered_email, u.telegram_id, u.global_status, u.created_at, u.country, u.behavior_notes, u.metadata, u.photo_url,
                    (SELECT s.submitted_zoom_name FROM submissions_history s
                     WHERE s.registered_email = u.registered_email
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name,
@@ -1036,6 +1093,12 @@ async def sync_zoom_data() -> int:
     active_meeting_id = zoom_service.meeting_id
     if not active_meeting_id:
         raise ValueError("No active meeting ID set.")
+        
+    try:
+        current_qs = zoom_service.get_custom_questions()
+        storage.set_setting("zoom_custom_questions", json.dumps(current_qs))
+    except Exception as e:
+        logger.warning(f"Failed to refresh Zoom custom questions cache during sync: {e}")
         
     zoom_registrants_by_status = {}
     for zoom_status in ["pending", "approved", "denied"]:
