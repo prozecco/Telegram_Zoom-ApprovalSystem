@@ -7,10 +7,13 @@ if (tg) {
 
 // Global State
 let allRequests = [];
+let allDirectoryUsers = [];
 let selectedEmails = new Set();
 let activeFilter = 'New';
 let searchQuery = '';
+let directorySearchQuery = '';
 let currentOpenEmail = null;
+let activeTab = 'queue';
 
 // DOM Elements
 const statTotalEl = document.getElementById('stat-total');
@@ -42,6 +45,12 @@ const syncBtnText = document.getElementById('sync-btn-text');
 const addMetaBtn = document.getElementById('add-meta-btn');
 const metadataListEl = document.getElementById('metadata-list');
 const addHistoryBtn = document.getElementById('add-history-btn');
+
+// Bottom Nav & Tabs Elements
+const usersDirectoryListEl = document.getElementById('users-directory-list');
+const globalSearchInputEl = document.getElementById('global-search-input');
+const exportCsvBtn = document.getElementById('export-csv-btn');
+const lastSyncStatusEl = document.getElementById('last-sync-status');
 
 // Dialog Elements
 const dialogOverlay = document.getElementById('dialog-overlay');
@@ -77,6 +86,10 @@ async function fetchStats() {
         statPendingEl.textContent = stats.pending;
         statApprovedEl.textContent = stats.approved;
         statDeniedEl.textContent = stats.denied;
+        
+        if (lastSyncStatusEl && stats.last_sync) {
+            lastSyncStatusEl.textContent = `Last synced: ${stats.last_sync}`;
+        }
     } catch (err) {
         console.error(err);
     }
@@ -124,7 +137,11 @@ async function runAction(emails, actionName) {
             
             // Refresh
             await fetchStats();
-            await fetchRequests();
+            if (activeTab === 'users') {
+                await fetchDirectory();
+            } else {
+                await fetchRequests();
+            }
             
             if (currentOpenEmail && emails.includes(currentOpenEmail)) {
                 // If the currently open user details is one of the modified ones, update details status badge
@@ -159,35 +176,35 @@ function getStatusBadge(status) {
     return '<span class="badge badge-pending">Pending</span>';
 }
 
-function renderTable() {
-    listCountLabel.textContent = `Showing ${allRequests.length} item${allRequests.length !== 1 ? 's' : ''}`;
-    
-    if (allRequests.length === 0) {
-        requestsListEl.innerHTML = `
+function renderRequestsList(requestsArray, targetElement, isDirectoryView) {
+    if (requestsArray.length === 0) {
+        targetElement.innerHTML = `
             <div style="text-align: center; padding: 40px; color: var(--tg-theme-hint-color);">
-                No registrants found matching the filter or search term.
+                No profiles found.
             </div>
         `;
         return;
     }
     
-    requestsListEl.innerHTML = '';
-    allRequests.forEach(req => {
+    targetElement.innerHTML = '';
+    requestsArray.forEach(req => {
         const card = document.createElement('div');
         card.className = 'request-card';
         card.dataset.email = req.registered_email;
         
-        // Checkbox container
-        const cbContainer = document.createElement('div');
-        cbContainer.className = 'card-checkbox';
-        cbContainer.onclick = (e) => e.stopPropagation(); // prevent drawer on checkbox click
-        
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = selectedEmails.has(req.registered_email);
-        checkbox.onchange = () => toggleSelectEmail(req.registered_email, checkbox.checked);
-        cbContainer.appendChild(checkbox);
-        card.appendChild(cbContainer);
+        if (!isDirectoryView) {
+            // Checkbox container for bulk actions
+            const cbContainer = document.createElement('div');
+            cbContainer.className = 'card-checkbox';
+            cbContainer.onclick = (e) => e.stopPropagation();
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = selectedEmails.has(req.registered_email);
+            checkbox.onchange = () => toggleSelectEmail(req.registered_email, checkbox.checked);
+            cbContainer.appendChild(checkbox);
+            card.appendChild(cbContainer);
+        }
         
         // Main info container
         const mainInfo = document.createElement('div');
@@ -229,34 +246,47 @@ function renderTable() {
         mainInfo.appendChild(metaDiv);
         card.appendChild(mainInfo);
         
-        // Quick Action Buttons
-        const actionsDiv = document.createElement('div');
-        actionsDiv.className = 'card-actions';
-        actionsDiv.onclick = (e) => e.stopPropagation();
-        
-        if (req.global_status !== 'Approved') {
-            const approveBtn = document.createElement('button');
-            approveBtn.className = 'action-icon-btn';
-            approveBtn.innerHTML = '🟢';
-            approveBtn.title = 'Approve';
-            approveBtn.onclick = () => runAction([req.registered_email], 'Approve');
-            actionsDiv.appendChild(approveBtn);
+        if (!isDirectoryView) {
+            // Quick Action Buttons
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'card-actions';
+            actionsDiv.onclick = (e) => e.stopPropagation();
+            
+            if (req.global_status !== 'Approved') {
+                const approveBtn = document.createElement('button');
+                approveBtn.className = 'action-icon-btn';
+                approveBtn.innerHTML = '🟢';
+                approveBtn.title = 'Approve';
+                approveBtn.onclick = () => runAction([req.registered_email], 'Approve');
+                actionsDiv.appendChild(approveBtn);
+            }
+            if (req.global_status !== 'Denied') {
+                const denyBtn = document.createElement('button');
+                denyBtn.className = 'action-icon-btn';
+                denyBtn.innerHTML = '🔴';
+                denyBtn.title = 'Deny';
+                denyBtn.onclick = () => runAction([req.registered_email], 'Deny');
+                actionsDiv.appendChild(denyBtn);
+            }
+            card.appendChild(actionsDiv);
+        } else {
+            // Navigation arrow for directory view
+            const arrowDiv = document.createElement('div');
+            arrowDiv.style = 'color: var(--tg-theme-hint-color); font-size: 16px; display: flex; align-items: center; margin-left: auto; padding: 0 4px;';
+            arrowDiv.innerHTML = '❯';
+            card.appendChild(arrowDiv);
         }
-        if (req.global_status !== 'Denied') {
-            const denyBtn = document.createElement('button');
-            denyBtn.className = 'action-icon-btn';
-            denyBtn.innerHTML = '🔴';
-            denyBtn.title = 'Deny';
-            denyBtn.onclick = () => runAction([req.registered_email], 'Deny');
-            actionsDiv.appendChild(denyBtn);
-        }
-        card.appendChild(actionsDiv);
         
-        // Click on the card opens detail drawer
+        // Shared Drawer open click handler
         card.onclick = () => openDrawer(req);
         
-        requestsListEl.appendChild(card);
+        targetElement.appendChild(card);
     });
+}
+
+function renderTable() {
+    listCountLabel.textContent = `Showing ${allRequests.length} item${allRequests.length !== 1 ? 's' : ''}`;
+    renderRequestsList(allRequests, requestsListEl, false);
 }
 
 // Checkboxes Selection Control
@@ -308,8 +338,9 @@ async function openDrawer(user) {
         const newStatus = detailStatusSelect.value;
         if (confirm(`Are you sure you want to change the status of ${user.registered_email} to ${newStatus}?`)) {
             await runAction([user.registered_email], newStatus);
-            // Refresh local request status value in allRequests list
-            const req = allRequests.find(r => r.registered_email === user.registered_email);
+            // Refresh local request status value in current list
+            const currentList = activeTab === 'users' ? allDirectoryUsers : allRequests;
+            const req = currentList.find(r => r.registered_email === user.registered_email);
             if (req) req.global_status = newStatus;
         } else {
             // Reset to previous status
@@ -455,10 +486,15 @@ async function saveMetadata(email, metadataArray) {
             renderMetadataList(email, metadataArray);
             
             // Reload list to fetch any background Telegram ID resolution
-            await fetchRequests();
+            if (activeTab === 'users') {
+                await fetchDirectory();
+            } else {
+                await fetchRequests();
+            }
             
             // Refresh drawer Telegram detail element
-            const updatedUser = allRequests.find(r => r.registered_email === email);
+            const currentList = activeTab === 'users' ? allDirectoryUsers : allRequests;
+            const updatedUser = currentList.find(r => r.registered_email === email);
             if (updatedUser) {
                 const tgUsername = updatedUser.telegram_username ? `@${updatedUser.telegram_username}` : 'No Telegram account';
                 const tgIdStr = updatedUser.telegram_id ? ` (ID: ${updatedUser.telegram_id})` : '';
@@ -762,10 +798,12 @@ function setSyncLoading(isLoading) {
         syncZoomBtn.disabled = true;
         syncBtnText.textContent = 'Syncing...';
         syncZoomBtn.style.opacity = '0.6';
+        tg?.showProgress && tg.showProgress();
     } else {
         syncZoomBtn.disabled = false;
         syncBtnText.textContent = 'Sync Zoom';
         syncZoomBtn.style.opacity = '1';
+        tg?.closeProgress && tg.closeProgress();
     }
 }
 
@@ -793,6 +831,117 @@ document.getElementById('bulk-btn-deny').onclick = () => {
         runAction(emailsList, 'Deny');
     }
 };
+
+// Tab Switching Navigation Logic
+document.querySelectorAll('.bottom-nav .nav-item').forEach(item => {
+    item.onclick = async () => {
+        const targetTab = item.dataset.tab;
+        if (targetTab === activeTab) return;
+        
+        // Update Active Nav Tab UI
+        document.querySelector('.bottom-nav .nav-item.active').classList.remove('active');
+        item.classList.add('active');
+        
+        // Toggle Visible Tab Sections
+        document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.add('hidden'));
+        document.getElementById(`tab-${targetTab}`).classList.remove('hidden');
+        
+        activeTab = targetTab;
+        
+        // Telegram Haptic Feedback
+        tg?.HapticFeedback?.impactOccurred('light');
+        
+        // Lazy Load data depending on tab
+        if (activeTab === 'queue') {
+            await fetchStats();
+            await fetchRequests();
+        } else if (activeTab === 'users') {
+            await fetchDirectory();
+        }
+    };
+});
+
+// Users Tab fuzzy search debounce
+let directorySearchTimeout = null;
+globalSearchInputEl.oninput = (e) => {
+    directorySearchQuery = e.target.value.trim();
+    clearTimeout(directorySearchTimeout);
+    directorySearchTimeout = setTimeout(() => {
+        fetchDirectory();
+    }, 300);
+};
+
+// Export CSV handler
+exportCsvBtn.onclick = () => {
+    exportToCSV();
+};
+
+async function fetchDirectory() {
+    try {
+        usersDirectoryListEl.innerHTML = `
+            <div style="text-align: center; padding: 40px; color: var(--tg-theme-hint-color);">
+                <div class="spinner" style="margin: 0 auto 10px;"></div>
+                Searching directory...
+            </div>
+        `;
+        let url = '/api/admin/requests?status_filter=All';
+        if (directorySearchQuery) {
+            url += `&search=${encodeURIComponent(directorySearchQuery)}`;
+        }
+        const response = await fetch(url, { headers: getHeaders() });
+        if (!response.ok) throw new Error('Directory fetch failed');
+        
+        allDirectoryUsers = await response.json();
+        renderRequestsList(allDirectoryUsers, usersDirectoryListEl, true);
+    } catch (err) {
+        console.error(err);
+        usersDirectoryListEl.innerHTML = `
+            <div style="text-align: center; padding: 40px; color: #ef4444;">
+                ❌ Failed to load directory.
+            </div>
+        `;
+    }
+}
+
+function exportToCSV() {
+    const dataToExport = activeTab === 'users' ? allDirectoryUsers : allRequests;
+    if (dataToExport.length === 0) {
+        alert("No data available to export.");
+        return;
+    }
+    
+    // Header row
+    const headers = ['Email', 'Telegram ID', 'Global Status', 'Registration Date', 'Country', 'Zoom Name', 'Telegram Username', 'Behavior Notes'];
+    const rows = [headers];
+    
+    dataToExport.forEach(user => {
+        rows.push([
+            user.registered_email || '',
+            user.telegram_id || '',
+            user.global_status || '',
+            user.created_at || '',
+            user.country || '',
+            user.zoom_name || '',
+            user.telegram_username || '',
+            (user.behavior_notes || '').replace(/"/g, '""') // escape quotes
+        ]);
+    });
+    
+    const csvContent = "data:text/csv;charset=utf-8," 
+        + rows.map(e => e.map(val => `"${val}"`).join(",")).join("\n");
+        
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    const filename = `registrants_export_${activeTab}_${new Date().toISOString().split('T')[0]}.csv`;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    
+    link.click();
+    document.body.removeChild(link);
+    
+    tg?.HapticFeedback?.notificationOccurred('success');
+}
 
 // Initial Execution
 fetchStats();

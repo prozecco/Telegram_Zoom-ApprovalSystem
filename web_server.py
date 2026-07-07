@@ -458,11 +458,14 @@ async def get_admin_stats(admin_user = Depends(verify_admin_access)):
             cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Denied'")
             denied = cursor.fetchone()["count"]
             
+            last_sync = storage.get_setting("last_zoom_sync") or "Never"
+            
             return {
                 "total": total,
                 "pending": pending,
                 "approved": approved,
-                "denied": denied
+                "denied": denied,
+                "last_sync": last_sync
             }
     except Exception as e:
         logger.error(f"Failed to fetch admin stats: {e}")
@@ -982,6 +985,8 @@ async def trigger_zoom_sync(admin_user = Depends(verify_admin_access)):
                             )
                         existing_history.add(email)
                         
+        from datetime import datetime, timezone
+        storage.set_setting("last_zoom_sync", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
         return {"status": "success", "message": f"Successfully synchronized {sync_count} profiles from Zoom."}
     except Exception as e:
         logger.error(f"Zoom sync failed: {e}")
