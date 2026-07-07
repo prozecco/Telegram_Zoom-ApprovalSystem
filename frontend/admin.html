@@ -635,6 +635,21 @@
                         <button id="add-admin-btn" class="btn btn-secondary" style="width: 100%; margin: 4px 0 0 0; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);">👤 Add Administrator</button>
                     </div>
                 </div>
+
+                <div class="tools-card">
+                    <h3>Telegram Username & ID Resolver</h3>
+                    <p style="font-size: 11px; color: var(--tg-theme-hint-color); margin: 0 0 10px 0;">Resolve any Telegram username (e.g. @name) to its numeric ID, or query a numeric ID to resolve details.</p>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
+                        <div style="display: flex; gap: 8px; width: 100%;">
+                            <input type="text" id="tg-resolve-query-input" placeholder="e.g. username or 98765432" style="flex: 1; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none; font-size: 13px;">
+                            <button id="tg-resolve-btn" class="btn btn-primary" style="width: auto; margin: 0; padding: 0 16px; height: 38px; line-height: 38px; font-size: 12px; font-weight: 600;">Resolve</button>
+                        </div>
+                        <div id="tg-resolve-result" class="hidden" style="margin-top: 8px; padding: 10px; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); font-size: 12px; display: flex; flex-direction: column; gap: 4px; box-sizing: border-box;">
+                            <!-- populated by JS -->
+                        </div>
+                    </div>
+                </div>
                 
                 <div class="tools-card">
                     <h3>Data Management & Testing</h3>

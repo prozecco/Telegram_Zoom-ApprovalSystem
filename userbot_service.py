@@ -89,5 +89,43 @@ class UserbotService:
             
         return None
 
+    async def resolve_entity(self, query: str) -> Optional[dict]:
+        """
+        Resolves a Telegram username or numeric ID to user details.
+        """
+        if not self.client:
+            return None
+            
+        if not self.is_started:
+            await self.start()
+            
+        if not self.is_started:
+            logger.error("Userbot is not started. Cannot resolve entity.")
+            return None
+            
+        query = query.strip()
+        if not query:
+            return None
+            
+        target = query
+        if query.isdigit() or (query.startswith("-") and query[1:].isdigit()):
+            target = int(query)
+        else:
+            target = query.lstrip("@")
+            
+        try:
+            user = await self.client.get_users(target)
+            if user:
+                fullname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "Telegram User"
+                return {
+                    "telegram_id": user.id,
+                    "username": user.username or "",
+                    "name": fullname
+                }
+        except Exception as e:
+            logger.error(f"Failed to resolve Telegram entity '{query}': {e}")
+            
+        return None
+
 # Singleton instance
 userbot_service = UserbotService()

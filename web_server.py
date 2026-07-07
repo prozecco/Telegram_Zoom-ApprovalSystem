@@ -117,6 +117,9 @@ class AdminTeamAddRequest(BaseModel):
     telegram_id: int
     username: Optional[str] = None
 
+class TelegramResolveRequest(BaseModel):
+    query: str
+
 def verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
     """
     Cryptographically verifies Telegram WebApp initData to prevent ID spoofing.
@@ -1084,6 +1087,19 @@ async def remove_admin_team_member(telegram_id: int, admin_user = Depends(verify
         return {"status": "success", "message": "Administrator revoked successfully"}
     except Exception as e:
         logger.error(f"Failed to revoke administrator: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/resolve-telegram")
+async def resolve_telegram_details(req: TelegramResolveRequest, admin_user = Depends(verify_admin_access)):
+    try:
+        resolved = await userbot_service.resolve_entity(req.query)
+        if not resolved:
+            raise HTTPException(status_code=404, detail="Could not resolve entity. Ensure userbot is configured and the username/ID is valid.")
+        return {"status": "success", "resolved": resolved}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to resolve Telegram entity: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def sync_zoom_data() -> int:

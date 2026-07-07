@@ -69,6 +69,11 @@ const addAdminIdInput = document.getElementById('add-admin-id-input');
 const addAdminUsernameInput = document.getElementById('add-admin-username-input');
 const addAdminBtn = document.getElementById('add-admin-btn');
 
+// Telegram Entity Resolver Elements
+const tgResolveQueryInput = document.getElementById('tg-resolve-query-input');
+const tgResolveBtn = document.getElementById('tg-resolve-btn');
+const tgResolveResult = document.getElementById('tg-resolve-result');
+
 // Advanced Directory Filters
 const directoryFilterStatus = document.getElementById('directory-filter-status');
 const directoryFilterOrigin = document.getElementById('directory-filter-origin');
@@ -1225,6 +1230,53 @@ addAdminBtn.onclick = async () => {
     } finally {
         addAdminBtn.disabled = false;
         addAdminBtn.textContent = '👤 Add Administrator';
+    }
+};
+
+tgResolveBtn.onclick = async () => {
+    const query = tgResolveQueryInput.value.trim();
+    if (!query) {
+        alert("Please enter a username or numeric ID to resolve.");
+        return;
+    }
+    if (tgResolveBtn.disabled) return;
+    try {
+        tgResolveBtn.disabled = true;
+        tgResolveBtn.textContent = 'Resolving...';
+        tgResolveResult.classList.add('hidden');
+        
+        const response = await fetch('/api/admin/resolve-telegram', {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify({ query: query })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            const user = data.resolved;
+            tgResolveResult.innerHTML = `
+                <div style="color: #4ade80; font-weight: 600; margin-bottom: 4px;">✅ Entity Resolved Successfully</div>
+                <div style="text-align: left;">👤 <b>Name:</b> ${escapeHtml(user.name)}</div>
+                <div style="text-align: left;">💬 <b>Username:</b> @${escapeHtml(user.username || 'None')}</div>
+                <div style="text-align: left;">🆔 <b>Telegram ID:</b> <code>${user.telegram_id}</code></div>
+            `;
+            tgResolveResult.classList.remove('hidden');
+            tg?.HapticFeedback?.notificationOccurred('success');
+        } else {
+            const err = await response.json();
+            tgResolveResult.innerHTML = `
+                <div style="color: #ef4444; font-weight: 600; margin-bottom: 2px;">❌ Resolution Failed</div>
+                <div style="color: var(--tg-theme-hint-color); font-size: 11px; text-align: left;">${escapeHtml(err.detail || "Entity not found")}</div>
+            `;
+            tgResolveResult.classList.remove('hidden');
+            tg?.HapticFeedback?.notificationOccurred('error');
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error resolving Telegram entity.");
+    } finally {
+        tgResolveBtn.disabled = false;
+        tgResolveBtn.textContent = 'Resolve';
     }
 };
 
