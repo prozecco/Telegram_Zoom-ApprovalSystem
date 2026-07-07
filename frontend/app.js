@@ -470,7 +470,23 @@ if (isPreviewMode) {
             hideAllGatewayStates();
             
             if (targetSim === 'guest') {
-                showForm();
+                const banner = document.getElementById('additional-info-banner');
+                if (banner) banner.classList.add('hidden');
+                loadQuestions();
+            } else if (targetSim === 'needs_info') {
+                const banner = document.getElementById('additional-info-banner');
+                if (banner) banner.classList.remove('hidden');
+                const mockProfile = {
+                    first_name: "Simulated",
+                    last_name: "Existing User",
+                    email: "existing_user@example.com",
+                    country: "US",
+                    metadata: [
+                        {title: "Telegram Username", value: "simulated_user"},
+                        {title: "Company", value: "Acme Corp"}
+                    ]
+                };
+                loadQuestions(mockProfile);
             } else if (targetSim === 'pending') {
                 pendingNameEl.textContent = 'Simulated Admin';
                 routerPendingEl.classList.remove('hidden');
