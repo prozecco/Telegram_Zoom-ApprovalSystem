@@ -109,7 +109,8 @@ def init_db():
         """)
         
         try:
-            execute_query(cursor, "ALTER TABLE users ADD COLUMN photo_url TEXT")
+            with get_db() as alter_cursor:
+                execute_query(alter_cursor, "ALTER TABLE users ADD COLUMN photo_url TEXT")
         except Exception:
             pass
         
