@@ -19,6 +19,12 @@ ZOOM_REGISTRATION_LINK = os.getenv("ZOOM_REGISTRATION_LINK")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "database.db")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Optional Userbot configurations for username-to-id resolution
+TELEGRAM_API_ID_RAW = os.getenv("TELEGRAM_API_ID")
+TELEGRAM_API_ID = int(TELEGRAM_API_ID_RAW) if TELEGRAM_API_ID_RAW else None
+TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
+TELEGRAM_SESSION_STRING = os.getenv("TELEGRAM_SESSION_STRING")
+
 # Validation list
 required_vars = {
     "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,

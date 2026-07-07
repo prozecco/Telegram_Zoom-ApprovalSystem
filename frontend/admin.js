@@ -453,6 +453,17 @@ async function saveMetadata(email, metadataArray) {
                 req.metadata = JSON.stringify(metadataArray);
             }
             renderMetadataList(email, metadataArray);
+            
+            // Reload list to fetch any background Telegram ID resolution
+            await fetchRequests();
+            
+            // Refresh drawer Telegram detail element
+            const updatedUser = allRequests.find(r => r.registered_email === email);
+            if (updatedUser) {
+                const tgUsername = updatedUser.telegram_username ? `@${updatedUser.telegram_username}` : 'No Telegram account';
+                const tgIdStr = updatedUser.telegram_id ? ` (ID: ${updatedUser.telegram_id})` : '';
+                detailTelegramEl.textContent = `${tgUsername}${tgIdStr}`;
+            }
         } else {
             alert("Failed to save metadata updates.");
         }

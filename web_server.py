@@ -16,6 +16,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 import config
 import storage
 from zoom_service import ZoomService
+from userbot_service import userbot_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("web_server")
@@ -718,17 +719,69 @@ async def get_user_metadata(email: str, admin_user = Depends(verify_admin_access
         logger.error(f"Error fetching user metadata: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/admin/lookup-username")
+async def lookup_telegram_username(username: str, admin_user = Depends(verify_admin_access)):
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required.")
+    try:
+        result = await userbot_service.resolve_username(username)
+        if result:
+            return {"status": "success", "result": result}
+        else:
+            raise HTTPException(status_code=404, detail="Username could not be resolved.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during username lookup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.put("/api/admin/metadata")
 async def update_user_metadata(req: AdminMetadataUpdateRequest, admin_user = Depends(verify_admin_access)):
     try:
         email = req.email.strip().lower()
         metadata_str = json.dumps(req.metadata)
+        
+        # Check if metadata contains Telegram Username
+        tg_username = None
+        if isinstance(req.metadata, list):
+            for item in req.metadata:
+                if item.get("title", "").strip().lower() in ("telegram username", "telegram_username", "username"):
+                    tg_username = item.get("value", "").strip()
+                    break
+        elif isinstance(req.metadata, dict):
+            for k, v in req.metadata.items():
+                if k.strip().lower() in ("telegram username", "telegram_username", "username"):
+                    tg_username = str(v).strip()
+                    break
+                    
         with storage.get_db() as cursor:
             storage.execute_query(
                 cursor,
                 "UPDATE users SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
                 (metadata_str, email)
             )
+            
+            # Auto-lookup telegram_id if missing and username is set
+            if tg_username:
+                storage.execute_query(
+                    cursor,
+                    "SELECT telegram_id FROM users WHERE LOWER(registered_email) = LOWER(?)",
+                    (email,)
+                )
+                row = cursor.fetchone()
+                if row and (not row["telegram_id"] or row["telegram_id"] == 0):
+                    try:
+                        resolved = await userbot_service.resolve_username(tg_username)
+                        if resolved:
+                            storage.execute_query(
+                                cursor,
+                                "UPDATE users SET telegram_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (resolved["telegram_id"], email)
+                            )
+                            logger.info(f"Auto-linked Telegram username {tg_username} to ID {resolved['telegram_id']} for {email}")
+                    except Exception as le:
+                        logger.error(f"Failed to auto-resolve username {tg_username}: {le}")
+                        
         return {"status": "success", "message": "Metadata updated successfully"}
     except Exception as e:
         logger.error(f"Error updating user metadata: {e}")
@@ -830,6 +883,23 @@ async def trigger_zoom_sync(admin_user = Depends(verify_admin_access)):
                     zoom_custom_q = r.get("custom_questions")
                     zoom_metadata_json = json.dumps(zoom_custom_q) if zoom_custom_q else None
                     
+                    # Check for Telegram Username in custom questions
+                    tg_username = None
+                    if zoom_custom_q:
+                        for q in zoom_custom_q:
+                            if q.get("title", "").strip().lower() in ("telegram username", "telegram_username", "username"):
+                                tg_username = q.get("value", "").strip()
+                                break
+                                
+                    resolved_tg_id = None
+                    if tg_username:
+                        try:
+                            resolved = await userbot_service.resolve_username(tg_username)
+                            if resolved:
+                                resolved_tg_id = resolved["telegram_id"]
+                        except Exception:
+                            pass
+                    
                     status_normalized = "Approved" if db_status == "approved" else "Denied" if db_status == "denied" else "Pending"
                     
                     user_record = existing_users.get(email)
@@ -838,23 +908,32 @@ async def trigger_zoom_sync(admin_user = Depends(verify_admin_access)):
                             storage.execute_query(
                                 cursor,
                                 "INSERT INTO users (registered_email, telegram_id, global_status, created_at, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                (email, None, status_normalized, zoom_create_time, zoom_country, zoom_reg_id, zoom_metadata_json)
+                                (email, resolved_tg_id, status_normalized, zoom_create_time, zoom_country, zoom_reg_id, zoom_metadata_json)
                             )
                         else:
                             storage.execute_query(
                                 cursor,
                                 "INSERT INTO users (registered_email, telegram_id, global_status, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-                                (email, None, status_normalized, zoom_country, zoom_reg_id, zoom_metadata_json)
+                                (email, resolved_tg_id, status_normalized, zoom_country, zoom_reg_id, zoom_metadata_json)
                             )
                         sync_count += 1
                         existing_users[email] = {
                             "registered_email": email,
+                            "telegram_id": resolved_tg_id,
                             "global_status": status_normalized,
                             "created_at": zoom_create_time,
                             "country": zoom_country,
                             "zoom_registrant_id": zoom_reg_id
                         }
                     else:
+                        # Update telegram_id if missing and resolved
+                        if resolved_tg_id and (not user_record.get("telegram_id") or user_record.get("telegram_id") == 0):
+                            storage.execute_query(
+                                cursor,
+                                "UPDATE users SET telegram_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                                (resolved_tg_id, email)
+                            )
+                            
                         if user_record["global_status"] != status_normalized:
                             storage.execute_query(
                                 cursor,
