@@ -2980,9 +2980,24 @@ def main() -> None:
     application.add_handler(CommandHandler("synczoom", synczoom_command))
     application.add_handler(CommandHandler("approveall", approveall_command))
 
-    # 6. Start Polling
+    # 6. Start Polling with self-healing retry loop for Conflict / deployment collisions
     logger.info("Telegram Bot starts polling...")
-    application.run_polling()
+    import time
+    from telegram.error import Conflict, TelegramError
+    
+    while True:
+        try:
+            application.run_polling()
+            break
+        except Conflict:
+            logger.warning("Telegram Bot Conflict: Another bot instance is running. Retrying in 10 seconds...")
+            time.sleep(10)
+        except TelegramError as te:
+            logger.error(f"Telegram Error during polling: {te}. Retrying in 10 seconds...")
+            time.sleep(10)
+        except Exception as e:
+            logger.error(f"Unexpected error during bot polling: {e}. Retrying in 15 seconds...")
+            time.sleep(15)
 
 if __name__ == "__main__":
     main()
