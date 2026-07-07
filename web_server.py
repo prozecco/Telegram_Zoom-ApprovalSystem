@@ -21,8 +21,23 @@ from userbot_service import userbot_service
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("web_server")
 
+from contextlib import asynccontextmanager
+
 zoom_service = ZoomService()
-app = FastAPI(title="Telegram Zoom App Web Server")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup actions
+    bg_task = asyncio.create_task(start_background_sync_loop())
+    yield
+    # Shutdown actions
+    bg_task.cancel()
+    try:
+        await bg_task
+    except asyncio.CancelledError:
+        pass
+
+app = FastAPI(title="Telegram Zoom App Web Server", lifespan=lifespan)
 
 # Enable CORS for local testing/Mini App loads
 app.add_middleware(
@@ -76,6 +91,14 @@ class AdminEditHistoryRequest(BaseModel):
     meeting_id: str
     action_taken: str
     action_timestamp: str
+
+class AdminSettingsUpdateRequest(BaseModel):
+    zoom_meeting_id: str
+    zoom_account_id: str
+    zoom_client_id: str
+    zoom_client_secret: str
+    zoom_registration_link: str
+    zoom_sync_interval: str
 
 def verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
     """
@@ -867,146 +890,255 @@ async def delete_history_log(history_id: int, admin_user = Depends(verify_admin_
         logger.error(f"Error deleting history log: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/admin/settings")
+async def get_admin_settings(admin_user = Depends(verify_admin_access)):
+    try:
+        zoom_meeting_id = storage.get_setting("zoom_meeting_id", config.ZOOM_MEETING_ID)
+        zoom_account_id = storage.get_setting("zoom_account_id", config.ZOOM_ACCOUNT_ID)
+        zoom_client_id = storage.get_setting("zoom_client_id", config.ZOOM_CLIENT_ID)
+        zoom_client_secret = storage.get_setting("zoom_client_secret", config.ZOOM_CLIENT_SECRET)
+        zoom_registration_link = storage.get_setting("zoom_registration_link", config.ZOOM_REGISTRATION_LINK)
+        zoom_sync_interval = storage.get_setting("zoom_sync_interval", "10 minutes")
+        
+        return {
+            "zoom_meeting_id": zoom_meeting_id,
+            "zoom_account_id": zoom_account_id,
+            "zoom_client_id": zoom_client_id,
+            "zoom_client_secret": zoom_client_secret,
+            "zoom_registration_link": zoom_registration_link,
+            "zoom_sync_interval": zoom_sync_interval
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch admin settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/admin/settings")
+async def update_admin_settings(req: AdminSettingsUpdateRequest, admin_user = Depends(verify_admin_access)):
+    try:
+        storage.set_setting("zoom_meeting_id", req.zoom_meeting_id.strip())
+        storage.set_setting("zoom_account_id", req.zoom_account_id.strip())
+        storage.set_setting("zoom_client_id", req.zoom_client_id.strip())
+        storage.set_setting("zoom_client_secret", req.zoom_client_secret.strip())
+        storage.set_setting("zoom_registration_link", req.zoom_registration_link.strip())
+        storage.set_setting("zoom_sync_interval", req.zoom_sync_interval.strip())
+        
+        # Clear zoom service access token to force re-auth with new credentials
+        zoom_service._access_token = None
+        zoom_service._token_expires_at = 0
+        zoom_service._cached_creds = None
+        
+        return {"status": "success", "message": "Settings updated successfully"}
+    except Exception as e:
+        logger.error(f"Failed to save settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def sync_zoom_data() -> int:
+    """
+    Core synchronization function. Fetches registrants from Zoom and updates database.
+    """
+    active_meeting_id = zoom_service.meeting_id
+    if not active_meeting_id:
+        raise ValueError("No active meeting ID set.")
+        
+    zoom_registrants_by_status = {}
+    for zoom_status in ["pending", "approved", "denied"]:
+        zoom_registrants_by_status[zoom_status] = zoom_service.list_registrants(status=zoom_status)
+        
+    with storage.get_db() as cursor:
+        storage.execute_query(cursor, "SELECT registered_email, telegram_id, global_status, created_at, country, zoom_registrant_id FROM users")
+        existing_users = {row["registered_email"].lower().strip(): dict(row) for row in cursor.fetchall()}
+        
+        storage.execute_query(cursor, "SELECT registered_email FROM submissions_history WHERE meeting_id = ?", (active_meeting_id,))
+        existing_history = {row["registered_email"].lower().strip() for row in cursor.fetchall()}
+        
+        sync_count = 0
+        for db_status, registrants in zoom_registrants_by_status.items():
+            for r in registrants:
+                email = r.get("email")
+                if not email:
+                    continue
+                email = email.strip().lower()
+                
+                first_name = r.get("first_name", "")
+                last_name = r.get("last_name", "")
+                zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
+                zoom_create_time = r.get("create_time")
+                zoom_country = r.get("country")
+                zoom_reg_id = r.get("id")
+                zoom_custom_q = r.get("custom_questions")
+                zoom_metadata_json = json.dumps(zoom_custom_q) if zoom_custom_q else None
+                
+                # Check for Telegram Username in custom questions
+                tg_username = None
+                if zoom_custom_q:
+                    for q in zoom_custom_q:
+                        if q.get("title", "").strip().lower() in ("telegram username", "telegram_username", "username"):
+                            tg_username = q.get("value", "").strip()
+                            break
+                            
+                resolved_tg_id = None
+                if tg_username:
+                    try:
+                        resolved = await userbot_service.resolve_username(tg_username)
+                        if resolved:
+                            resolved_tg_id = resolved["telegram_id"]
+                    except Exception:
+                        pass
+                
+                status_normalized = "Approved" if db_status == "approved" else "Denied" if db_status == "denied" else "Pending"
+                
+                user_record = existing_users.get(email)
+                if not user_record:
+                    if zoom_create_time:
+                        storage.execute_query(
+                            cursor,
+                            "INSERT INTO users (registered_email, telegram_id, global_status, created_at, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (email, resolved_tg_id, status_normalized, zoom_create_time, zoom_country, zoom_reg_id, zoom_metadata_json)
+                        )
+                    else:
+                        storage.execute_query(
+                            cursor,
+                            "INSERT INTO users (registered_email, telegram_id, global_status, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                            (email, resolved_tg_id, status_normalized, zoom_country, zoom_reg_id, zoom_metadata_json)
+                        )
+                    sync_count += 1
+                    existing_users[email] = {
+                        "registered_email": email,
+                        "telegram_id": resolved_tg_id,
+                        "global_status": status_normalized,
+                        "created_at": zoom_create_time,
+                        "country": zoom_country,
+                        "zoom_registrant_id": zoom_reg_id
+                    }
+                else:
+                    # Update telegram_id if missing and resolved
+                    if resolved_tg_id and (not user_record.get("telegram_id") or user_record.get("telegram_id") == 0):
+                        storage.execute_query(
+                            cursor,
+                            "UPDATE users SET telegram_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                            (resolved_tg_id, email)
+                        )
+                        
+                    if user_record["global_status"] != status_normalized:
+                        storage.execute_query(
+                            cursor,
+                            "UPDATE users SET global_status = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                            (status_normalized, email)
+                        )
+                        sync_count += 1
+                    
+                    if zoom_country and user_record.get("country") != zoom_country:
+                        storage.execute_query(
+                            cursor,
+                            "UPDATE users SET country = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                            (zoom_country, email)
+                        )
+                    
+                    if zoom_reg_id and user_record.get("zoom_registrant_id") != zoom_reg_id:
+                        storage.execute_query(
+                            cursor,
+                            "UPDATE users SET zoom_registrant_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                            (zoom_reg_id, email)
+                        )
+                        
+                    if zoom_metadata_json:
+                        storage.execute_query(
+                            cursor,
+                            "UPDATE users SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                            (zoom_metadata_json, email)
+                        )
+                        
+                if email not in existing_history:
+                    if zoom_create_time:
+                        storage.execute_query(
+                            cursor,
+                            """INSERT INTO submissions_history 
+                               (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken, action_timestamp) 
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (email, zoom_name, "Unknown", active_meeting_id, status_normalized, zoom_create_time)
+                        )
+                    else:
+                        storage.execute_query(
+                            cursor,
+                            """INSERT INTO submissions_history 
+                               (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken) 
+                               VALUES (?, ?, ?, ?, ?)""",
+                            (email, zoom_name, "Unknown", active_meeting_id, status_normalized)
+                        )
+                    existing_history.add(email)
+                    
+    from datetime import datetime, timezone
+    storage.set_setting("last_zoom_sync", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+    return sync_count
+
 @app.post("/api/admin/sync")
 async def trigger_zoom_sync(admin_user = Depends(verify_admin_access)):
     try:
-        active_meeting_id = zoom_service.meeting_id
-        if not active_meeting_id:
-            raise HTTPException(status_code=400, detail="No active meeting ID set.")
-            
-        zoom_registrants_by_status = {}
-        for zoom_status in ["pending", "approved", "denied"]:
-            zoom_registrants_by_status[zoom_status] = zoom_service.list_registrants(status=zoom_status)
-            
-        with storage.get_db() as cursor:
-            storage.execute_query(cursor, "SELECT registered_email, global_status, created_at, country, zoom_registrant_id FROM users")
-            existing_users = {row["registered_email"].lower().strip(): dict(row) for row in cursor.fetchall()}
-            
-            storage.execute_query(cursor, "SELECT registered_email FROM submissions_history WHERE meeting_id = ?", (active_meeting_id,))
-            existing_history = {row["registered_email"].lower().strip() for row in cursor.fetchall()}
-            
-            sync_count = 0
-            for db_status, registrants in zoom_registrants_by_status.items():
-                for r in registrants:
-                    email = r.get("email")
-                    if not email:
-                        continue
-                    email = email.strip().lower()
-                    
-                    first_name = r.get("first_name", "")
-                    last_name = r.get("last_name", "")
-                    zoom_name = f"{first_name} {last_name}".strip() or "Zoom Registrant"
-                    zoom_create_time = r.get("create_time")
-                    zoom_country = r.get("country")
-                    zoom_reg_id = r.get("id")
-                    zoom_custom_q = r.get("custom_questions")
-                    zoom_metadata_json = json.dumps(zoom_custom_q) if zoom_custom_q else None
-                    
-                    # Check for Telegram Username in custom questions
-                    tg_username = None
-                    if zoom_custom_q:
-                        for q in zoom_custom_q:
-                            if q.get("title", "").strip().lower() in ("telegram username", "telegram_username", "username"):
-                                tg_username = q.get("value", "").strip()
-                                break
-                                
-                    resolved_tg_id = None
-                    if tg_username:
-                        try:
-                            resolved = await userbot_service.resolve_username(tg_username)
-                            if resolved:
-                                resolved_tg_id = resolved["telegram_id"]
-                        except Exception:
-                            pass
-                    
-                    status_normalized = "Approved" if db_status == "approved" else "Denied" if db_status == "denied" else "Pending"
-                    
-                    user_record = existing_users.get(email)
-                    if not user_record:
-                        if zoom_create_time:
-                            storage.execute_query(
-                                cursor,
-                                "INSERT INTO users (registered_email, telegram_id, global_status, created_at, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                (email, resolved_tg_id, status_normalized, zoom_create_time, zoom_country, zoom_reg_id, zoom_metadata_json)
-                            )
-                        else:
-                            storage.execute_query(
-                                cursor,
-                                "INSERT INTO users (registered_email, telegram_id, global_status, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-                                (email, resolved_tg_id, status_normalized, zoom_country, zoom_reg_id, zoom_metadata_json)
-                            )
-                        sync_count += 1
-                        existing_users[email] = {
-                            "registered_email": email,
-                            "telegram_id": resolved_tg_id,
-                            "global_status": status_normalized,
-                            "created_at": zoom_create_time,
-                            "country": zoom_country,
-                            "zoom_registrant_id": zoom_reg_id
-                        }
-                    else:
-                        # Update telegram_id if missing and resolved
-                        if resolved_tg_id and (not user_record.get("telegram_id") or user_record.get("telegram_id") == 0):
-                            storage.execute_query(
-                                cursor,
-                                "UPDATE users SET telegram_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
-                                (resolved_tg_id, email)
-                            )
-                            
-                        if user_record["global_status"] != status_normalized:
-                            storage.execute_query(
-                                cursor,
-                                "UPDATE users SET global_status = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
-                                (status_normalized, email)
-                            )
-                            sync_count += 1
-                        
-                        if zoom_country and user_record.get("country") != zoom_country:
-                            storage.execute_query(
-                                cursor,
-                                "UPDATE users SET country = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
-                                (zoom_country, email)
-                            )
-                        
-                        if zoom_reg_id and user_record.get("zoom_registrant_id") != zoom_reg_id:
-                            storage.execute_query(
-                                cursor,
-                                "UPDATE users SET zoom_registrant_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
-                                (zoom_reg_id, email)
-                            )
-                            
-                        if zoom_metadata_json:
-                            storage.execute_query(
-                                cursor,
-                                "UPDATE users SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
-                                (zoom_metadata_json, email)
-                            )
-                            
-                    if email not in existing_history:
-                        if zoom_create_time:
-                            storage.execute_query(
-                                cursor,
-                                """INSERT INTO submissions_history 
-                                   (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken, action_timestamp) 
-                                   VALUES (?, ?, ?, ?, ?, ?)""",
-                                (email, zoom_name, "Unknown", active_meeting_id, status_normalized, zoom_create_time)
-                            )
-                        else:
-                            storage.execute_query(
-                                cursor,
-                                """INSERT INTO submissions_history 
-                                   (registered_email, submitted_zoom_name, submitted_telegram_username, meeting_id, action_taken) 
-                                   VALUES (?, ?, ?, ?, ?)""",
-                                (email, zoom_name, "Unknown", active_meeting_id, status_normalized)
-                            )
-                        existing_history.add(email)
-                        
-        from datetime import datetime, timezone
-        storage.set_setting("last_zoom_sync", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+        sync_count = await sync_zoom_data()
         return {"status": "success", "message": f"Successfully synchronized {sync_count} profiles from Zoom."}
     except Exception as e:
         logger.error(f"Zoom sync failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Dynamic Human-Readable Duration Parser
+import re
+def parse_duration_to_seconds(duration_str: str) -> Optional[int]:
+    if not duration_str:
+        return 600
+    normalized = duration_str.strip().lower()
+    if normalized in ("disabled", "disable", "off", "0", "false", "none"):
+        return None
+    
+    match = re.match(r"^(\d+)\s*(s|sec|second|seconds|m|min|minute|minutes|h|hr|hour|hours|d|day|days)$", normalized)
+    if not match:
+        return 600
+        
+    value = int(match.group(1))
+    unit = match.group(2)
+    
+    if unit.startswith("s"):
+        return max(value, 10)  # limit minimum of 10s to prevent spamming
+    elif unit.startswith("m"):
+        return value * 60
+    elif unit.startswith("h"):
+        return value * 3600
+    elif unit.startswith("d"):
+        return value * 86400
+    return 600
+
+# Background Scheduler Task Loop
+async def start_background_sync_loop():
+    logger.info("Initializing background Zoom synchronization loop...")
+    await asyncio.sleep(5) # Let Uvicorn startup cleanly
+    
+    while True:
+        try:
+            interval_str = storage.get_setting("zoom_sync_interval", "10 minutes")
+            interval_seconds = parse_duration_to_seconds(interval_str)
+            
+            if interval_seconds is None:
+                # Sync disabled, sleep and check setting again
+                await asyncio.sleep(30)
+                continue
+                
+            logger.info(f"Running periodic background Zoom sync (interval: {interval_str})...")
+            
+            try:
+                sync_count = await sync_zoom_data()
+                logger.info(f"Background Zoom sync complete. Synced {sync_count} records.")
+            except Exception as se:
+                logger.error(f"Sync error in background scheduler: {se}")
+                
+            await asyncio.sleep(interval_seconds)
+            
+        except asyncio.CancelledError:
+            logger.info("Background Zoom sync task cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Error in background sync loop thread: {e}")
+            await asyncio.sleep(60)
+
+
 
 # Mount static files folder to serve the frontend web client
 frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")

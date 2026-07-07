@@ -399,5 +399,12 @@ function escapeHtml(str) {
         .replace(/'/g, "&#039;");
 }
 
-// Run initial gateway router load
-initGateway();
+// Run initial gateway router load or preview mode
+const urlParams = new URLSearchParams(window.location.search);
+const isPreviewMode = urlParams.get('preview') === 'true';
+
+if (isPreviewMode) {
+    loadQuestions();
+} else {
+    initGateway();
+}

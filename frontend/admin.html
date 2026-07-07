@@ -551,18 +551,58 @@
             <!-- TAB 3: TOOLS (System & Sync) -->
             <section id="tab-tools" class="tab-pane hidden" style="display: flex; flex-direction: column; gap: 16px;">
                 <div class="tools-card">
-                    <h3>Zoom Integration</h3>
-                    <p style="font-size: 12px; color: var(--tg-theme-hint-color); margin: 0 0 6px 0;">Synchronize all registrant status updates and registration timestamps directly from the Zoom Meetings API.</p>
-                    <button id="sync-zoom-btn" class="btn btn-primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0;">
+                    <h3>Zoom API Configuration</h3>
+                    <p style="font-size: 11px; color: var(--tg-theme-hint-color); margin: 0 0 10px 0;">Configure access tokens and parameters dynamically. If empty, falls back to environment variables.</p>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; width: 100%;">
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Zoom Meeting ID</label>
+                            <input type="text" id="zoom-meeting-id-input" placeholder="e.g. 1234567890" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;">
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Account ID</label>
+                            <input type="text" id="zoom-account-id-input" placeholder="Server-to-Server Account ID" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;">
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Client ID</label>
+                            <input type="text" id="zoom-client-id-input" placeholder="Server-to-Server Client ID" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;">
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Client Secret</label>
+                            <input type="password" id="zoom-client-secret-input" placeholder="Server-to-Server Client Secret" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;">
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Registration Link</label>
+                            <input type="text" id="zoom-registration-link-input" placeholder="https://zoom.us/meeting/register/..." style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;">
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                            <label style="font-size: 12px; font-weight: 500; color: var(--tg-theme-hint-color);">Background Sync Interval</label>
+                            <input type="text" id="zoom-sync-interval-input" placeholder="e.g. 10 minutes, 1 hour, 45s, Disabled" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); outline: none;">
+                            <span style="font-size: 10px; color: var(--tg-theme-hint-color);">Supports text inputs (e.g. 45s, 10 minutes, 1 hour, 3 days, or Disabled)</span>
+                        </div>
+                        
+                        <button id="save-settings-btn" class="btn btn-primary" style="width: 100%; margin: 8px 0 0 0; font-weight: 600;">Save Credentials</button>
+                    </div>
+                </div>
+
+                <div class="tools-card">
+                    <h3>Zoom Manual Synchronization</h3>
+                    <p style="font-size: 12px; color: var(--tg-theme-hint-color); margin: 0 0 6px 0;">Synchronize all registrant status updates and registration timestamps directly from the Zoom Meetings API immediately.</p>
+                    <button id="sync-zoom-btn" class="btn btn-secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);">
                         🔄 <span id="sync-btn-text">Sync Zoom Registrants</span>
                     </button>
                     <p id="last-sync-status" class="hint-text" style="font-size: 11px; color: var(--tg-theme-hint-color); margin: 4px 0 0 0; font-style: italic;">Last synced: Never</p>
                 </div>
                 
                 <div class="tools-card">
-                    <h3>Data Management</h3>
-                    <p style="font-size: 12px; color: var(--tg-theme-hint-color); margin: 0 0 6px 0;">Export the currently filtered list of registrants to a standard CSV file for spreadsheet usage.</p>
-                    <button id="export-csv-btn" class="btn btn-secondary" style="width: 100%; margin: 0;">📥 Export Current View to CSV</button>
+                    <h3>Data Management & Testing</h3>
+                    <p style="font-size: 12px; color: var(--tg-theme-hint-color); margin: 0 0 8px 0;">Utilities for list exporting and previewing the user registration form interface.</p>
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        <button id="export-csv-btn" class="btn btn-secondary" style="width: 100%; margin: 0;">📥 Export Current View to CSV</button>
+                        <a href="/index.html?preview=true" target="_blank" class="btn btn-secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; box-sizing: border-box; text-align: center; margin: 0; height: 42px; line-height: 42px; padding: 0;">
+                            📋 Preview User Registration Form
+                        </a>
+                    </div>
                 </div>
             </section>
         </main>

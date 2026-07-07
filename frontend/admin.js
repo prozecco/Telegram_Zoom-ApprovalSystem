@@ -52,6 +52,15 @@ const globalSearchInputEl = document.getElementById('global-search-input');
 const exportCsvBtn = document.getElementById('export-csv-btn');
 const lastSyncStatusEl = document.getElementById('last-sync-status');
 
+// Settings Input Elements
+const zoomMeetingIdInput = document.getElementById('zoom-meeting-id-input');
+const zoomAccountIdInput = document.getElementById('zoom-account-id-input');
+const zoomClientIdInput = document.getElementById('zoom-client-id-input');
+const zoomClientSecretInput = document.getElementById('zoom-client-secret-input');
+const zoomRegistrationLinkInput = document.getElementById('zoom-registration-link-input');
+const zoomSyncIntervalInput = document.getElementById('zoom-sync-interval-input');
+const saveSettingsBtn = document.getElementById('save-settings-btn');
+
 // Dialog Elements
 const dialogOverlay = document.getElementById('dialog-overlay');
 const dialog = document.getElementById('dialog');
@@ -274,8 +283,14 @@ function renderRequestsList(requestsArray, targetElement, isDirectoryView) {
         
         const metaDiv = document.createElement('div');
         metaDiv.className = 'card-meta';
+        metaDiv.style = 'display: flex; align-items: center; gap: 6px; flex-wrap: wrap;';
         
-        metaDiv.innerHTML = getStatusBadge(req.global_status);
+        const hasTg = req.telegram_id && req.telegram_id !== 0;
+        const sourceBadge = hasTg 
+            ? '<span class="badge" style="background: rgba(36,129,204,0.12); color: #2481cc; border: 1px solid rgba(36,129,204,0.2); font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 500;">📱 Telegram Linked</span>' 
+            : '<span class="badge" style="background: rgba(245,158,11,0.12); color: #f59e0b; border: 1px solid rgba(245,158,11,0.2); font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 500;">🌐 Zoom Web</span>';
+            
+        metaDiv.innerHTML = getStatusBadge(req.global_status) + sourceBadge;
         
         if (req.created_at) {
             const timeSpan = document.createElement('span');
@@ -897,6 +912,9 @@ document.querySelectorAll('.bottom-nav .nav-item').forEach(item => {
             await fetchRequests();
         } else if (activeTab === 'users') {
             await fetchDirectory();
+        } else if (activeTab === 'tools') {
+            await fetchSettings();
+            await fetchStats();
         }
     };
 });
@@ -914,6 +932,62 @@ globalSearchInputEl.oninput = (e) => {
 // Export CSV handler
 exportCsvBtn.onclick = () => {
     exportToCSV();
+};
+
+// Settings CRUD handlers
+async function fetchSettings() {
+    try {
+        const response = await fetch('/api/admin/settings', { headers: getHeaders() });
+        if (response.ok) {
+            const data = await response.json();
+            zoomMeetingIdInput.value = data.zoom_meeting_id || '';
+            zoomAccountIdInput.value = data.zoom_account_id || '';
+            zoomClientIdInput.value = data.zoom_client_id || '';
+            zoomClientSecretInput.value = data.zoom_client_secret || '';
+            zoomRegistrationLinkInput.value = data.zoom_registration_link || '';
+            zoomSyncIntervalInput.value = data.zoom_sync_interval || '10 minutes';
+        }
+    } catch (err) {
+        console.error("Failed to load settings:", err);
+    }
+}
+
+saveSettingsBtn.onclick = async () => {
+    if (saveSettingsBtn.disabled) return;
+    try {
+        saveSettingsBtn.disabled = true;
+        saveSettingsBtn.textContent = 'Saving...';
+        
+        const payload = {
+            zoom_meeting_id: zoomMeetingIdInput.value.trim(),
+            zoom_account_id: zoomAccountIdInput.value.trim(),
+            zoom_client_id: zoomClientIdInput.value.trim(),
+            zoom_client_secret: zoomClientSecretInput.value.trim(),
+            zoom_registration_link: zoomRegistrationLinkInput.value.trim(),
+            zoom_sync_interval: zoomSyncIntervalInput.value.trim()
+        };
+        
+        const response = await fetch('/api/admin/settings', {
+            method: 'PUT',
+            headers: getHeaders(),
+            body: JSON.stringify(payload)
+        });
+        
+        if (response.ok) {
+            alert("Settings updated successfully!");
+            tg?.HapticFeedback?.notificationOccurred('success');
+            await fetchStats();
+        } else {
+            const err = await response.json();
+            alert("Failed to save settings: " + (err.detail || "Unknown error"));
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error saving settings.");
+    } finally {
+        saveSettingsBtn.disabled = false;
+        saveSettingsBtn.textContent = 'Save Credentials';
+    }
 };
 
 async function fetchDirectory() {
