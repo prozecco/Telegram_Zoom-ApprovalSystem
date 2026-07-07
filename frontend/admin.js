@@ -424,9 +424,23 @@ async function openDrawer(user) {
         drawerAvatarEl.textContent = (user.zoom_name || 'M')[0].toUpperCase();
     }
     
-    const tgUsername = user.telegram_username ? `@${user.telegram_username}` : 'No Telegram account';
+    const tgUsername = user.telegram_username ? `@${user.telegram_username}` : '';
     const tgIdStr = user.telegram_id ? ` (ID: ${user.telegram_id})` : '';
-    detailTelegramEl.textContent = `${tgUsername}${tgIdStr}`;
+    const contactUrl = user.telegram_username 
+        ? `https://t.me/${user.telegram_username}` 
+        : (user.telegram_id ? `tg://user?id=${user.telegram_id}` : null);
+        
+    detailTelegramEl.innerHTML = '';
+    if (contactUrl) {
+        const link = document.createElement('a');
+        link.href = contactUrl;
+        link.target = '_blank';
+        link.style = 'color: var(--tg-theme-link-color, #2481cc); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;';
+        link.textContent = tgUsername ? `${tgUsername}${tgIdStr}` : `User ID: ${user.telegram_id}`;
+        detailTelegramEl.appendChild(link);
+    } else {
+        detailTelegramEl.textContent = 'No Telegram account';
+    }
     
     detailStatusSelect.value = user.global_status || 'Pending';
     detailStatusSelect.onchange = async () => {
@@ -1254,11 +1268,20 @@ tgResolveBtn.onclick = async () => {
         if (response.ok) {
             const data = await response.json();
             const user = data.resolved;
+            const contactUrl = user.username 
+                ? `https://t.me/${user.username}` 
+                : `tg://user?id=${user.telegram_id}`;
+                
             tgResolveResult.innerHTML = `
                 <div style="color: #4ade80; font-weight: 600; margin-bottom: 4px;">✅ Entity Resolved Successfully</div>
                 <div style="text-align: left;">👤 <b>Name:</b> ${escapeHtml(user.name)}</div>
                 <div style="text-align: left;">💬 <b>Username:</b> @${escapeHtml(user.username || 'None')}</div>
                 <div style="text-align: left;">🆔 <b>Telegram ID:</b> <code>${user.telegram_id}</code></div>
+                <div style="margin-top: 8px;">
+                    <a href="${contactUrl}" target="_blank" class="btn btn-secondary" style="display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 12px; font-size: 11px; height: auto; line-height: normal; margin: 0; background: rgba(36,129,204,0.15); color: #2481cc; border: 1px solid rgba(36,129,204,0.25); text-decoration: none; width: auto; font-weight: 600; box-sizing: border-box;">
+                        💬 Open Chat in Telegram
+                    </a>
+                </div>
             `;
             tgResolveResult.classList.remove('hidden');
             tg?.HapticFeedback?.notificationOccurred('success');
