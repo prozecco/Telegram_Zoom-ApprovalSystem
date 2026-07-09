@@ -499,7 +499,7 @@ async function fetchHistoryList(user) {
             hDiv.className = 'history-item';
             hDiv.style = 'position: relative; padding: 10px; border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; margin-bottom: 8px; box-sizing: border-box;';
             
-            const dateStr = new Date(item.action_timestamp).toLocaleString();
+            const dateStr = new Date(item.action_timestamp).toLocaleString('en-US', { timeZone: 'Asia/Bangkok' });
             hDiv.innerHTML = `
                 <div class="history-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                     <span style="font-weight: 600; font-size: 13px;">Meeting ID: ${item.meeting_id || 'Unknown'}</span>

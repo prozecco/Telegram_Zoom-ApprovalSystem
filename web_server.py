@@ -744,7 +744,27 @@ async def get_admin_history(email: str, admin_user = Depends(verify_admin_access
     """
     try:
         history = storage.get_submissions_by_email(email)
-        return history
+        results = []
+        for item in history:
+            r = dict(item)
+            action_timestamp = r.get("action_timestamp")
+            if isinstance(action_timestamp, datetime):
+                if action_timestamp.tzinfo is None:
+                    action_timestamp = action_timestamp.replace(tzinfo=timezone.utc)
+                r["action_timestamp"] = action_timestamp.isoformat()
+            elif isinstance(action_timestamp, str):
+                action_timestamp = action_timestamp.strip()
+                if action_timestamp:
+                    if not (action_timestamp.endswith("Z") or "+" in action_timestamp or "-" in action_timestamp[10:]):
+                        action_timestamp = action_timestamp.replace(" ", "T")
+                        if "T" in action_timestamp:
+                            r["action_timestamp"] = action_timestamp + "Z"
+                        else:
+                            r["action_timestamp"] = action_timestamp
+                    else:
+                        r["action_timestamp"] = action_timestamp.replace(" ", "T")
+            results.append(r)
+        return results
     except Exception as e:
         logger.error(f"Failed to fetch history for email {email}: {e}")
         raise HTTPException(
