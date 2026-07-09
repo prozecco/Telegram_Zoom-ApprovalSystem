@@ -13,6 +13,7 @@ from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 import uvicorn
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from datetime import datetime, timezone
 
 import config
 import storage
@@ -695,6 +696,24 @@ async def get_admin_requests(
             results = []
             for row in rows:
                 r = dict(row)
+                # Format created_at to timezone-aware UTC ISO string
+                created_at = r.get("created_at")
+                if isinstance(created_at, datetime):
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    r["created_at"] = created_at.isoformat()
+                elif isinstance(created_at, str):
+                    created_at = created_at.strip()
+                    if created_at:
+                        if not (created_at.endswith("Z") or "+" in created_at or "-" in created_at[10:]):
+                            created_at = created_at.replace(" ", "T")
+                            if "T" in created_at:
+                                r["created_at"] = created_at + "Z"
+                            else:
+                                r["created_at"] = created_at
+                        else:
+                            r["created_at"] = created_at.replace(" ", "T")
+
                 tg_username = r.get("telegram_username")
                 if not tg_username or tg_username.strip().lower() == "none":
                     # Check metadata custom questions

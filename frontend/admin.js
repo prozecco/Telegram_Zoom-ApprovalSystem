@@ -237,10 +237,10 @@ function getRelativeTimeAndDate(dateString) {
     } else if (diffDays < 30) {
         relativeStr = `${diffDays}d ago`;
     } else {
-        relativeStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        relativeStr = date.toLocaleDateString('en-US', { timeZone: 'Asia/Bangkok', month: 'short', day: 'numeric' });
     }
     
-    const absDateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const absDateStr = date.toLocaleDateString('en-US', { timeZone: 'Asia/Bangkok', month: 'short', day: 'numeric' });
     return `· ${relativeStr} (${absDateStr})`;
 }
 
