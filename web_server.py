@@ -632,7 +632,9 @@ async def get_admin_requests(
     """
     try:
         query_str = """
-            SELECT u.registered_email, u.telegram_id, u.global_status, u.created_at, u.country, u.behavior_notes, u.metadata, u.photo_url,
+            SELECT u.registered_email, u.telegram_id, u.global_status, 
+                   COALESCE((SELECT s.action_timestamp FROM submissions_history s WHERE s.registered_email = u.registered_email ORDER BY s.action_timestamp DESC LIMIT 1), u.created_at) as created_at,
+                   u.country, u.behavior_notes, u.metadata, u.photo_url,
                    (SELECT s.submitted_zoom_name FROM submissions_history s
                     WHERE s.registered_email = u.registered_email
                     ORDER BY s.action_timestamp DESC LIMIT 1) as zoom_name,
@@ -646,20 +648,22 @@ async def get_admin_requests(
         where_clauses = [f"(u.active_meeting_id = {placeholder} OR u.active_meeting_id IS NULL)"]
         params = [current_meeting_id]
         
+        latest_time_expr = "COALESCE((SELECT s.action_timestamp FROM submissions_history s WHERE s.registered_email = u.registered_email ORDER BY s.action_timestamp DESC LIMIT 1), u.created_at)"
+        
         # Apply status filter
         if status_filter:
             if status_filter == "New":
                 where_clauses.append("u.global_status = 'Pending'")
                 if storage.IS_POSTGRES:
-                    where_clauses.append("u.created_at >= NOW() - INTERVAL '3 days'")
+                    where_clauses.append(f"{latest_time_expr} >= NOW() - INTERVAL '3 days'")
                 else:
-                    where_clauses.append("u.created_at >= datetime('now', '-3 days')")
+                    where_clauses.append(f"{latest_time_expr} >= datetime('now', '-3 days')")
             elif status_filter == "OnHold":
                 where_clauses.append("u.global_status = 'Pending'")
                 if storage.IS_POSTGRES:
-                    where_clauses.append("u.created_at < NOW() - INTERVAL '3 days'")
+                    where_clauses.append(f"{latest_time_expr} < NOW() - INTERVAL '3 days'")
                 else:
-                    where_clauses.append("u.created_at < datetime('now', '-3 days')")
+                    where_clauses.append(f"{latest_time_expr} < datetime('now', '-3 days')")
             elif status_filter in ("Pending", "Approved", "Denied", "Blacklisted", "Deferred"):
                 where_clauses.append("u.global_status = %s" if storage.IS_POSTGRES else "u.global_status = ?")
                 params.append(status_filter)
@@ -679,7 +683,7 @@ async def get_admin_requests(
         if where_clauses:
             query_str += " WHERE " + " AND ".join(where_clauses)
             
-        query_str += " ORDER BY u.created_at DESC"
+        query_str += f" ORDER BY {latest_time_expr} DESC"
         
         with storage.get_db() as conn:
             cursor = conn.execute(query_str, tuple(params))
@@ -1270,12 +1274,19 @@ async def sync_zoom_data() -> int:
                         "zoom_registrant_id": zoom_reg_id
                     }
                 else:
-                    # Update active_meeting_id for synced users
-                    storage.execute_query(
-                        cursor,
-                        "UPDATE users SET active_meeting_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
-                        (active_meeting_id, email)
-                    )
+                    # Update active_meeting_id and created_at for synced users
+                    if zoom_create_time:
+                        storage.execute_query(
+                            cursor,
+                            "UPDATE users SET active_meeting_id = ?, created_at = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                            (active_meeting_id, zoom_create_time, email)
+                        )
+                    else:
+                        storage.execute_query(
+                            cursor,
+                            "UPDATE users SET active_meeting_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                            (active_meeting_id, email)
+                        )
                     
                     # Update telegram_id if missing and resolved
                     if resolved_tg_id and (not user_record.get("telegram_id") or user_record.get("telegram_id") == 0):
