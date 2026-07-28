@@ -1,17 +1,21 @@
-// Initialize Telegram WebApp SDK
-const tg = window.Telegram.WebApp;
+// Initialize Telegram WebApp SDK safely
+const tg = window.Telegram?.WebApp;
 
-// Expand the app to take up full available height in Telegram
-tg.expand();
+// Expand the app to take up full available height in Telegram if available
+if (tg) {
+    tg.ready?.();
+    tg.expand?.();
+}
 
-// Theme variables (Telegram provides these automatically)
-document.documentElement.style.setProperty('--tg-theme-bg-color', tg.themeParams.bg_color || '#ffffff');
-document.documentElement.style.setProperty('--tg-theme-secondary-bg-color', tg.themeParams.secondary_bg_color || '#f4f4f5');
-document.documentElement.style.setProperty('--tg-theme-text-color', tg.themeParams.text_color || '#1f2937');
-document.documentElement.style.setProperty('--tg-theme-hint-color', tg.themeParams.hint_color || '#9ca3af');
-document.documentElement.style.setProperty('--tg-theme-link-color', tg.themeParams.link_color || '#2481cc');
-document.documentElement.style.setProperty('--tg-theme-button-color', tg.themeParams.button_color || '#2481cc');
-document.documentElement.style.setProperty('--tg-theme-button-text-color', tg.themeParams.button_text_color || '#ffffff');
+// Theme variables (Telegram provides these automatically, fallback to defaults)
+const theme = tg?.themeParams || {};
+document.documentElement.style.setProperty('--tg-theme-bg-color', theme.bg_color || '#ffffff');
+document.documentElement.style.setProperty('--tg-theme-secondary-bg-color', theme.secondary_bg_color || '#f4f4f5');
+document.documentElement.style.setProperty('--tg-theme-text-color', theme.text_color || '#1f2937');
+document.documentElement.style.setProperty('--tg-theme-hint-color', theme.hint_color || '#9ca3af');
+document.documentElement.style.setProperty('--tg-theme-link-color', theme.link_color || '#2481cc');
+document.documentElement.style.setProperty('--tg-theme-button-color', theme.button_color || '#2481cc');
+document.documentElement.style.setProperty('--tg-theme-button-text-color', theme.button_text_color || '#ffffff');
 
 // Dom Elements
 const routerLoadingEl = document.getElementById('router-loading');
@@ -63,7 +67,6 @@ function getHeaders() {
     return headers;
 }
 
-// Fetch Zoom registration questions on load
 // Fetch Zoom registration questions on load
 async function loadQuestions(userProfile = null) {
     showLoading();
@@ -361,7 +364,11 @@ function setSubmitLoading(isLoading) {
 
 // Close Mini App
 closeBtn.addEventListener('click', () => {
-    tg.close();
+    if (tg?.close) {
+        tg.close();
+    } else {
+        window.close();
+    }
 });
 
 retryBtn.addEventListener('click', initGateway);

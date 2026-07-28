@@ -103,6 +103,7 @@ def init_db():
                 zoom_registrant_id TEXT,
                 metadata TEXT,
                 photo_url TEXT,
+                active_meeting_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -111,6 +112,24 @@ def init_db():
         try:
             with get_db() as alter_cursor:
                 execute_query(alter_cursor, "ALTER TABLE users ADD COLUMN photo_url TEXT")
+        except Exception:
+            pass
+            
+        try:
+            with get_db() as alter_cursor:
+                execute_query(alter_cursor, "ALTER TABLE users ADD COLUMN active_meeting_id TEXT")
+        except Exception:
+            pass
+
+        try:
+            with get_db() as backfill_cursor:
+                execute_query(backfill_cursor, """
+                    UPDATE users SET active_meeting_id = (
+                        SELECT s.meeting_id FROM submissions_history s 
+                        WHERE s.registered_email = users.registered_email 
+                        ORDER BY s.action_timestamp DESC LIMIT 1
+                    ) WHERE active_meeting_id IS NULL;
+                """)
         except Exception:
             pass
         
@@ -357,20 +376,20 @@ def add_submission(email: str, telegram_id: int, zoom_name: str, telegram_userna
                         cursor,
                         """
                         UPDATE users 
-                        SET telegram_id = ?, global_status = ?, join_url = ?, country = COALESCE(?, country), metadata = ?, updated_at = CURRENT_TIMESTAMP
+                        SET telegram_id = ?, global_status = ?, join_url = ?, country = COALESCE(?, country), metadata = ?, active_meeting_id = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE LOWER(registered_email) = LOWER(?)
                         """,
-                        (telegram_id, new_status, join_url, country, metadata_json, email)
+                        (telegram_id, new_status, join_url, country, metadata_json, meeting_id, email)
                     )
                 else:
                     execute_query(
                         cursor,
                         """
                         UPDATE users 
-                        SET telegram_id = ?, global_status = ?, join_url = ?, country = COALESCE(?, country), updated_at = CURRENT_TIMESTAMP
+                        SET telegram_id = ?, global_status = ?, join_url = ?, country = COALESCE(?, country), active_meeting_id = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE LOWER(registered_email) = LOWER(?)
                         """,
-                        (telegram_id, new_status, join_url, country, email)
+                        (telegram_id, new_status, join_url, country, meeting_id, email)
                     )
             else:
                 if metadata_json:
@@ -378,29 +397,29 @@ def add_submission(email: str, telegram_id: int, zoom_name: str, telegram_userna
                         cursor,
                         """
                         UPDATE users 
-                        SET telegram_id = ?, global_status = ?, country = COALESCE(?, country), metadata = ?, updated_at = CURRENT_TIMESTAMP
+                        SET telegram_id = ?, global_status = ?, country = COALESCE(?, country), metadata = ?, active_meeting_id = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE LOWER(registered_email) = LOWER(?)
                         """,
-                        (telegram_id, new_status, country, metadata_json, email)
+                        (telegram_id, new_status, country, metadata_json, meeting_id, email)
                     )
                 else:
                     execute_query(
                         cursor,
                         """
                         UPDATE users 
-                        SET telegram_id = ?, global_status = ?, country = COALESCE(?, country), updated_at = CURRENT_TIMESTAMP
+                        SET telegram_id = ?, global_status = ?, country = COALESCE(?, country), active_meeting_id = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE LOWER(registered_email) = LOWER(?)
                         """,
-                        (telegram_id, new_status, country, email)
+                        (telegram_id, new_status, country, meeting_id, email)
                     )
         else:
             execute_query(
                 cursor,
                 """
-                INSERT INTO users (registered_email, telegram_id, global_status, join_url, country, metadata)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO users (registered_email, telegram_id, global_status, join_url, country, metadata, active_meeting_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (email, telegram_id, action_taken, join_url, country, metadata_json)
+                (email, telegram_id, action_taken, join_url, country, metadata_json, meeting_id)
             )
             
         # Log to submissions_history

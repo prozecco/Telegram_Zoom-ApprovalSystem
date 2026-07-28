@@ -13,7 +13,7 @@ from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 import uvicorn
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import config
 import storage
@@ -584,34 +584,37 @@ async def register_user(req: RegisterRequest):
 @app.get("/api/admin/stats")
 async def get_admin_stats(admin_user = Depends(verify_admin_access)):
     """
-    Returns summary counters for the Admin Dashboard.
+    Returns summary counters for the Admin Dashboard filtered by active meeting ID.
     """
     try:
-        with storage.get_db() as cursor:
-            cursor.execute("SELECT COUNT(*) as count FROM users")
+        current_meeting_id = zoom_service.meeting_id
+        placeholder = "%s" if storage.IS_POSTGRES else "?"
+        
+        with storage.get_db() as conn:
+            cursor = conn.execute(f"SELECT COUNT(*) as count FROM users WHERE (active_meeting_id = {placeholder} OR active_meeting_id IS NULL)", (current_meeting_id,))
             total = cursor.fetchone()["count"]
             
-            cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending'")
+            cursor = conn.execute(f"SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND (active_meeting_id = {placeholder} OR active_meeting_id IS NULL)", (current_meeting_id,))
             pending = cursor.fetchone()["count"]
             
-            cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Approved'")
+            cursor = conn.execute(f"SELECT COUNT(*) as count FROM users WHERE global_status = 'Approved' AND (active_meeting_id = {placeholder} OR active_meeting_id IS NULL)", (current_meeting_id,))
             approved = cursor.fetchone()["count"]
             
-            cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Denied'")
+            cursor = conn.execute(f"SELECT COUNT(*) as count FROM users WHERE global_status = 'Denied' AND (active_meeting_id = {placeholder} OR active_meeting_id IS NULL)", (current_meeting_id,))
             denied = cursor.fetchone()["count"]
             
             # Query New Pending (<= 3 days)
             if storage.IS_POSTGRES:
-                cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND created_at >= NOW() - INTERVAL '3 days'")
+                cursor = conn.execute(f"SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND (active_meeting_id = {placeholder} OR active_meeting_id IS NULL) AND created_at >= NOW() - INTERVAL '3 days'", (current_meeting_id,))
             else:
-                cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND created_at >= datetime('now', '-3 days')")
+                cursor = conn.execute(f"SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND (active_meeting_id = {placeholder} OR active_meeting_id IS NULL) AND created_at >= datetime('now', '-3 days')", (current_meeting_id,))
             new_count = cursor.fetchone()["count"]
             
             # Query On Hold Pending (> 3 days)
             if storage.IS_POSTGRES:
-                cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND created_at < NOW() - INTERVAL '3 days'")
+                cursor = conn.execute(f"SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND (active_meeting_id = {placeholder} OR active_meeting_id IS NULL) AND created_at < NOW() - INTERVAL '3 days'", (current_meeting_id,))
             else:
-                cursor.execute("SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND created_at < datetime('now', '-3 days')")
+                cursor = conn.execute(f"SELECT COUNT(*) as count FROM users WHERE global_status = 'Pending' AND (active_meeting_id = {placeholder} OR active_meeting_id IS NULL) AND created_at < datetime('now', '-3 days')", (current_meeting_id,))
             on_hold_count = cursor.fetchone()["count"]
             
             last_sync = storage.get_setting("last_zoom_sync") or "Never"
@@ -652,8 +655,10 @@ async def get_admin_requests(
                     ORDER BY s.action_timestamp DESC LIMIT 1) as telegram_username
             FROM users u
         """
-        where_clauses = []
-        params = []
+        current_meeting_id = zoom_service.meeting_id
+        placeholder = "%s" if storage.IS_POSTGRES else "?"
+        where_clauses = [f"(u.active_meeting_id = {placeholder} OR u.active_meeting_id IS NULL)"]
+        params = [current_meeting_id]
         
         # Apply status filter
         if status_filter:
@@ -1260,14 +1265,14 @@ async def sync_zoom_data() -> int:
                     if zoom_create_time:
                         storage.execute_query(
                             cursor,
-                            "INSERT INTO users (registered_email, telegram_id, global_status, created_at, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (email, resolved_tg_id, status_normalized, zoom_create_time, zoom_country, zoom_reg_id, zoom_metadata_json)
+                            "INSERT INTO users (registered_email, telegram_id, global_status, created_at, country, zoom_registrant_id, metadata, active_meeting_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (email, resolved_tg_id, status_normalized, zoom_create_time, zoom_country, zoom_reg_id, zoom_metadata_json, active_meeting_id)
                         )
                     else:
                         storage.execute_query(
                             cursor,
-                            "INSERT INTO users (registered_email, telegram_id, global_status, country, zoom_registrant_id, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-                            (email, resolved_tg_id, status_normalized, zoom_country, zoom_reg_id, zoom_metadata_json)
+                            "INSERT INTO users (registered_email, telegram_id, global_status, country, zoom_registrant_id, metadata, active_meeting_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (email, resolved_tg_id, status_normalized, zoom_country, zoom_reg_id, zoom_metadata_json, active_meeting_id)
                         )
                     sync_count += 1
                     existing_users[email] = {
@@ -1279,6 +1284,13 @@ async def sync_zoom_data() -> int:
                         "zoom_registrant_id": zoom_reg_id
                     }
                 else:
+                    # Update active_meeting_id for synced users
+                    storage.execute_query(
+                        cursor,
+                        "UPDATE users SET active_meeting_id = ?, updated_at = CURRENT_TIMESTAMP WHERE LOWER(registered_email) = LOWER(?)",
+                        (active_meeting_id, email)
+                    )
+                    
                     # Update telegram_id if missing and resolved
                     if resolved_tg_id and (not user_record.get("telegram_id") or user_record.get("telegram_id") == 0):
                         storage.execute_query(
@@ -1335,7 +1347,6 @@ async def sync_zoom_data() -> int:
                         )
                     existing_history.add(email)
                     
-    from datetime import datetime, timezone, timedelta
     bangkok_tz = timezone(timedelta(hours=7))
     storage.set_setting("last_zoom_sync", datetime.now(bangkok_tz).strftime("%Y-%m-%d %H:%M:%S GMT+7"))
     return sync_count
