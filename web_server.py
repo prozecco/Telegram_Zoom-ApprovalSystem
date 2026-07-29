@@ -154,8 +154,9 @@ def verify_admin_access(authorization: str = Header(...)) -> dict:
     Dependency to verify Telegram WebApp initData signature and check admin status.
     Expects initData in the 'Authorization' header.
     """
-    if authorization == "MOCK_TOKEN":
-        return {"id": config.ADMIN_CHAT_ID, "first_name": "Web Admin", "username": "admin"}
+    # Allow testing bypass only in local/dev mode (no production DATABASE_URL set)
+    if authorization == "MOCK_TOKEN" and not storage.IS_POSTGRES:
+        return {"id": config.ADMIN_CHAT_ID, "first_name": "Test Admin", "username": "admin"}
 
     data = verify_telegram_init_data(authorization, config.TELEGRAM_BOT_TOKEN)
     if not data:
@@ -243,14 +244,14 @@ async def verify_auth_role(authorization: str = Header(None)):
     Verifies the user's role on startup based on their Telegram initData.
     Falls back to 'guest' role for direct browser access without Telegram initData.
     """
-    if authorization == "MOCK_TOKEN":
+    if authorization == "MOCK_TOKEN" and not storage.IS_POSTGRES:
         return {
             "role": "admin",
             "telegram_id": config.ADMIN_CHAT_ID,
             "name": "Mock Admin"
         }
         
-    if not authorization:
+    if not authorization or authorization == "MOCK_TOKEN":
         return {
             "role": "guest"
         }
